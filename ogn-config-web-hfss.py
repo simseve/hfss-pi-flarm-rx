@@ -26,17 +26,40 @@ HEARTBEAT_INTERVAL = 300  # 5 minutes
 heartbeat_thread = None
 heartbeat_running = False
 
-# Load manufacturer secret from .env
-def load_manufacturer_secret():
+# Load environment variables from .env
+def load_env_var(var_name):
     try:
         if os.path.exists(ENV_FILE):
             with open(ENV_FILE, 'r') as f:
                 for line in f:
-                    if line.startswith('MANUFACTURER_SECRET_OGN='):
+                    if line.startswith(f'{var_name}='):
                         return line.split('=', 1)[1].strip()
     except:
         pass
     return None
+
+def get_raspberry_pi_serial():
+    """Get Raspberry Pi CPU serial number"""
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            for line in f:
+                if line.startswith('Serial'):
+                    return line.split(':')[1].strip()[-8:]  # Last 8 chars
+    except:
+        pass
+    return 'UNKNOWN'
+
+def get_default_hfss_config():
+    """Get default HFSS configuration with auto-populated values"""
+    config = read_config()
+    serial = get_raspberry_pi_serial()
+
+    return {
+        'server_url': load_env_var('HFSS_SERVER_URL') or 'https://dg-dev.hikeandfly.app',
+        'station_id': f'OGN_HFSS_{serial}',
+        'station_name': config.get('call', 'NOCALL'),
+        'manufacturer_secret': load_env_var('MANUFACTURER_SECRET_OGN') or ''
+    }
 
 # HTML Template (keeping original, adding HFSS section at end)
 HTML = '''<!DOCTYPE html>
@@ -58,10 +81,10 @@ HTML = '''<!DOCTYPE html>
 <button class="btn btn-danger" onclick="unregisterHFSS()">Unregister</button>
 {% else %}
 <form id="hfssForm">
-<div class="form-group"><label>Server URL</label><input name="server_url" placeholder="https://your-hfss-server.com" required></div>
-<div class="form-group"><label>Station ID</label><input name="station_id" placeholder="OGN_STATION_ALPINE01" pattern="^OGN_STATION_.+" required></div>
-<div class="form-group"><label>Station Name</label><input name="station_name" placeholder="Alpine OGN Station" required></div>
-<div class="form-group"><label>Manufacturer Secret</label><input type="password" name="manufacturer_secret" placeholder="Get from server admin" required></div>
+<div class="form-group"><label>Server URL</label><input name="server_url" value="{{hfss_defaults.server_url}}" required></div>
+<div class="form-group"><label>Station ID</label><input name="station_id" value="{{hfss_defaults.station_id}}" pattern="^OGN_HFSS_.+" required readonly></div>
+<div class="form-group"><label>Station Name</label><input name="station_name" value="{{hfss_defaults.station_name}}" required></div>
+<div class="form-group"><label>Manufacturer Secret</label><input type="password" name="manufacturer_secret" value="{{hfss_defaults.manufacturer_secret}}" required></div>
 <button type="submit" class="btn">Register with HFSS</button>
 </form>
 {% endif %}
@@ -380,7 +403,7 @@ def get_hfss_status():
 
 @app.route('/')
 def index():
-    return render_template_string(HTML,config=read_config(),ip=get_ip(),wifi=get_wifi_status(),hfss=get_hfss_status())
+    return render_template_string(HTML,config=read_config(),ip=get_ip(),wifi=get_wifi_status(),hfss=get_hfss_status(),hfss_defaults=get_default_hfss_config())
 
 @app.route('/api/save',methods=['POST'])
 def save():
