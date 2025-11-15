@@ -20,11 +20,13 @@ CONFIG_FILE = '/home/hfss/ogn-pi34/rtlsdr-ogn-0.3.2/Template.conf'
 WPA_SUPPLICANT = '/etc/wpa_supplicant/wpa_supplicant.conf'
 CREDENTIALS_FILE = '/home/hfss/.ogn_credentials.json'
 ENV_FILE = '/home/hfss/hfss-pi-flarm-rx/.env'
+HEARTBEAT_LOG_FILE = '/home/hfss/.ogn_heartbeat_log.json'
 
 # HFSS Configuration
 HEARTBEAT_INTERVAL = 300  # 5 minutes
 heartbeat_thread = None
 heartbeat_running = False
+heartbeat_history = []  # Store last 1000 heartbeats
 
 # Load environment variables from .env
 def load_env_var(var_name):
@@ -56,7 +58,7 @@ def get_default_hfss_config():
 
     return {
         'server_url': load_env_var('HFSS_SERVER_URL') or 'https://dg-dev.hikeandfly.app',
-        'station_id': f'OGN_HFSS_{serial}',
+        'station_id': f'OGN_STATION_{serial}',
         'station_name': config.get('call', 'NOCALL'),
         'manufacturer_secret': load_env_var('MANUFACTURER_SECRET_OGN') or ''
     }
@@ -78,11 +80,16 @@ HTML = '''<!DOCTYPE html>
 <strong>Last Heartbeat:</strong> {{hfss.last_heartbeat}}<br>
 <strong>Heartbeat:</strong> {{hfss.heartbeat_status}}
 </div>
+<button class="btn" onclick="viewHeartbeatLogs()">View Heartbeat Logs</button>
 <button class="btn btn-danger" onclick="unregisterHFSS()">Unregister</button>
+<div id="heartbeat-logs" style="display:none;margin-top:20px;">
+<h3>Heartbeat Logs (Last 1000)</h3>
+<div id="logs-container" style="max-height:400px;overflow-y:auto;background:#f8f9fa;padding:10px;border-radius:4px;font-family:monospace;font-size:12px;"></div>
+</div>
 {% else %}
 <form id="hfssForm">
 <div class="form-group"><label>Server URL</label><input name="server_url" value="{{hfss_defaults.server_url}}" required></div>
-<div class="form-group"><label>Station ID</label><input name="station_id" value="{{hfss_defaults.station_id}}" pattern="^OGN_HFSS_.+" required readonly></div>
+<div class="form-group"><label>Station ID</label><input name="station_id" value="{{hfss_defaults.station_id}}" pattern="^OGN_STATION_.+" required readonly></div>
 <div class="form-group"><label>Station Name</label><input name="station_name" value="{{hfss_defaults.station_name}}" required></div>
 <div class="form-group"><label>Manufacturer Secret</label><input type="password" name="manufacturer_secret" value="{{hfss_defaults.manufacturer_secret}}" required></div>
 <button type="submit" class="btn">Register with HFSS</button>
@@ -163,6 +170,52 @@ if(!confirm('Unregister from HFSS? Heartbeat will stop.'))return;
 const r=await fetch('/api/hfss/unregister',{method:'POST'});
 const j=await r.json();document.getElementById('status').innerHTML='<div class="status '+(j.success?'success':'error')+'">'+j.message+'</div>';
 if(j.success)setTimeout(()=>location.reload(),1500);
+}
+async function viewHeartbeatLogs(){
+const container=document.getElementById('heartbeat-logs');
+if(container.style.display==='none'){
+const r=await fetch('/api/hfss/heartbeat-logs');
+const j=await r.json();
+if(j.success){
+const logsDiv=document.getElementById('logs-container');
+logsDiv.innerHTML='';
+j.logs.reverse().forEach(log=>{
+const entry=document.createElement('div');
+entry.style.cssText='margin-bottom:15px;padding:10px;background:white;border-radius:4px;border:1px solid #ddd';
+const statusColor=log.response_status===200?'green':log.response_status===0?'orange':'red';
+const toggleId='log-'+Math.random().toString(36).substr(2,9);
+const header=document.createElement('div');
+header.style.marginBottom='8px';
+header.innerHTML='<strong style="color:'+statusColor+'">'+log.timestamp+'</strong> - <span style="font-weight:bold;color:'+statusColor+'">Status: '+log.response_status+'</span>';
+const btn=document.createElement('button');
+btn.className='btn btn-small';
+btn.textContent='Toggle Details';
+btn.onclick=function(){const d=document.getElementById(toggleId);d.style.display=d.style.display==='none'?'block':'none'};
+const details=document.createElement('div');
+details.id=toggleId;
+details.style.cssText='display:none;margin-top:10px';
+const payloadPre=document.createElement('pre');
+payloadPre.style.cssText='background:#f8f9fa;padding:8px;border-radius:4px;overflow-x:auto;font-size:11px';
+payloadPre.textContent=JSON.stringify(log.payload,null,2);
+const respPre=document.createElement('pre');
+respPre.style.cssText='background:#f8f9fa;padding:8px;border-radius:4px;overflow-x:auto;font-size:11px;margin-top:8px';
+respPre.textContent=log.response_text;
+details.innerHTML='<strong>Payload:</strong>';
+details.appendChild(payloadPre);
+details.innerHTML+='<strong>Response:</strong>';
+details.appendChild(respPre);
+entry.appendChild(header);
+entry.appendChild(btn);
+entry.appendChild(details);
+logsDiv.appendChild(entry);
+});
+container.style.display='block';
+}else{
+alert('Failed to load logs: '+j.message);
+}
+}else{
+container.style.display='none';
+}
 }
 document.getElementById('wifiForm').onsubmit=async(e)=>{e.preventDefault();
 const d=Object.fromEntries(new FormData(e.target));
@@ -304,6 +357,35 @@ def save_credentials(creds):
     except:
         return False
 
+def load_heartbeat_history():
+    global heartbeat_history
+    if os.path.exists(HEARTBEAT_LOG_FILE):
+        try:
+            with open(HEARTBEAT_LOG_FILE, 'r') as f:
+                heartbeat_history = json.load(f)
+        except:
+            heartbeat_history = []
+    else:
+        heartbeat_history = []
+
+def save_heartbeat_log(payload, response_status, response_text):
+    global heartbeat_history
+    entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "payload": payload,
+        "response_status": response_status,
+        "response_text": response_text
+    }
+    heartbeat_history.append(entry)
+    # Keep only last 100 entries to prevent file from growing too large
+    if len(heartbeat_history) > 100:
+        heartbeat_history = heartbeat_history[-100:]
+    try:
+        with open(HEARTBEAT_LOG_FILE, 'w') as f:
+            json.dump(heartbeat_history, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save heartbeat log: {e}")
+
 def generate_registration_token(device_id, manufacturer, secret):
     message = f"{manufacturer}:{device_id}"
     token = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
@@ -311,18 +393,50 @@ def generate_registration_token(device_id, manufacturer, secret):
 
 def get_station_status():
     status = {"timestamp": datetime.utcnow().isoformat()}
+
+    # CPU Temperature
     try:
         with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
             cpu_temp = float(f.read().strip()) / 1000.0
             status["cpu_temp"] = round(cpu_temp, 1)
     except:
         status["cpu_temp"] = None
+
+    # Uptime
     try:
         with open('/proc/uptime', 'r') as f:
             uptime_seconds = int(float(f.read().split()[0]))
             status["uptime"] = uptime_seconds
     except:
         status["uptime"] = 0
+
+    # Disk Usage
+    try:
+        import shutil
+        disk_stat = shutil.disk_usage('/')
+        status["disk_usage_percent"] = round((disk_stat.used / disk_stat.total) * 100, 1)
+    except:
+        status["disk_usage_percent"] = None
+
+    # Memory Usage
+    try:
+        with open('/proc/meminfo', 'r') as f:
+            lines = f.readlines()
+            mem_total = int([l for l in lines if l.startswith('MemTotal:')][0].split()[1])
+            mem_available = int([l for l in lines if l.startswith('MemAvailable:')][0].split()[1])
+            mem_used = mem_total - mem_available
+            status["memory_usage_percent"] = round((mem_used / mem_total) * 100, 1)
+    except:
+        status["memory_usage_percent"] = None
+
+    # OGN Clients (count connections on port 10110)
+    try:
+        result = subprocess.run(['netstat', '-tn'], capture_output=True, text=True, timeout=2)
+        ogn_connections = len([line for line in result.stdout.split('\n') if ':10110' in line and 'ESTABLISHED' in line])
+        status["ogn_clients"] = ogn_connections
+    except:
+        status["ogn_clients"] = None
+
     return status
 
 def heartbeat_worker():
@@ -337,6 +451,14 @@ def heartbeat_worker():
             status = get_station_status()
 
             payload = {
+                "device_id": creds["device_id"],
+                "latitude": config.get("latitude", 0.0),
+                "longitude": config.get("longitude", 0.0),
+                "altitude": config.get("altitude", 0),
+                "speed": 0,
+                "heading": 0,
+                "timestamp": status["timestamp"],
+                "flight_id": "00000000-0000-0000-0000-000000000000",
                 "device_metadata": {
                     "heartbeat": True,
                     "station_status": "online",
@@ -345,24 +467,32 @@ def heartbeat_worker():
                     "station_altitude": config.get('altitude', 0),
                     "cpu_temp": status["cpu_temp"],
                     "uptime": status["uptime"],
+                    "disk_usage_percent": status.get("disk_usage_percent"),
+                    "memory_usage_percent": status.get("memory_usage_percent"),
+                    "ogn_clients": status.get("ogn_clients"),
                     "timestamp": status["timestamp"]
                 }
             }
 
             response = requests.post(
-                f"{creds['server_url']}/api/v1/gps",
-                headers={"X-API-Key": creds['api_key']},
+                f"{creds['server_url']}/api/v1/gps/",
+                headers={"Authorization": f"Bearer {creds['api_key']}"},
                 json=payload,
                 timeout=10
             )
+
+            save_heartbeat_log(payload, response.status_code, response.text)
 
             if response.status_code == 200:
                 creds['last_heartbeat'] = datetime.utcnow().isoformat()
                 save_credentials(creds)
                 print(f"✓ Heartbeat sent - CPU: {status['cpu_temp']}°C")
+            else:
+                print(f"✗ Heartbeat failed - Status: {response.status_code}, Response: {response.text}")
 
         except Exception as e:
             print(f"Heartbeat error: {e}")
+            save_heartbeat_log(payload if 'payload' in locals() else {}, 0, str(e))
 
         time.sleep(HEARTBEAT_INTERVAL)
 
@@ -545,7 +675,16 @@ def hfss_unregister():
     except Exception as e:
         return jsonify({'success':False,'message':str(e)})
 
+@app.route('/api/hfss/heartbeat-logs')
+def heartbeat_logs():
+    try:
+        return jsonify({'success':True,'logs':heartbeat_history})
+    except Exception as e:
+        return jsonify({'success':False,'message':str(e),'logs':[]})
+
 if __name__=='__main__':
+    # Load heartbeat history
+    load_heartbeat_history()
     # Start heartbeat if already registered
     if load_credentials():
         start_heartbeat()
