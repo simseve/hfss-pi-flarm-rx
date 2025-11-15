@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  ogn-web:
+    build: .
+    container_name: ogn-web
+    image: ogn-web:latest
+    restart: unless-stopped
+
+    # Network mode: host allows direct access to system network interfaces
+    network_mode: host
+
+    # Privileged mode needed for network interface management
+    privileged: true
+
+    environment:
+      - MANUFACTURER_SECRET_OGN=${MANUFACTURER_SECRET_OGN}
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      # Mount OGN config file
+      - /home/hfss/ogn-pi34/rtlsdr-ogn-0.3.2/Template.conf:/config/Template.conf
+
+      # Mount WiFi config
+      - /etc/wpa_supplicant/wpa_supplicant.conf:/config/wpa_supplicant.conf
+
+      # Credentials storage
+      - ./credentials:/credentials
+
+      # System info access
+      - /sys/class/thermal:/sys/class/thermal:ro
+      - /proc:/host/proc:ro
+
+    # Override config paths in the container
+    command: >
+      sh -c "
+      export CONFIG_FILE=/config/Template.conf &&
+      export WPA_SUPPLICANT=/config/wpa_supplicant.conf &&
+      export CREDENTIALS_FILE=/credentials/.ogn_credentials.json &&
+      python3 main.py
+      "
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
