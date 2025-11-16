@@ -429,13 +429,19 @@ def get_station_status():
     except:
         status["memory_usage_percent"] = None
 
-    # OGN Clients (count connections on port 10110)
+    # OGN Status (check if RF and decoder are running)
     try:
-        result = subprocess.run(['netstat', '-tn'], capture_output=True, text=True, timeout=2)
-        ogn_connections = len([line for line in result.stdout.split('\n') if ':10110' in line and 'ESTABLISHED' in line])
-        status["ogn_clients"] = ogn_connections
+        result = subprocess.run(['pgrep', '-x', 'ogn-rf'], capture_output=True, text=True, timeout=2)
+        ogn_rf_running = bool(result.stdout.strip())
+        result = subprocess.run(['pgrep', '-x', 'ogn-decode'], capture_output=True, text=True, timeout=2)
+        ogn_decode_running = bool(result.stdout.strip())
+        status["ogn_rf_running"] = ogn_rf_running
+        status["ogn_decode_running"] = ogn_decode_running
+        status["ogn_status"] = "online" if (ogn_rf_running and ogn_decode_running) else "offline"
     except:
-        status["ogn_clients"] = None
+        status["ogn_rf_running"] = None
+        status["ogn_decode_running"] = None
+        status["ogn_status"] = "unknown"
 
     # WireGuard VPN IP
     try:
@@ -469,7 +475,7 @@ def heartbeat_worker():
                 "flight_id": "00000000-0000-0000-0000-000000000000",
                 "device_metadata": {
                     "heartbeat": True,
-                    "station_status": "online",
+                    "station_status": status.get("ogn_status", "unknown"),
                     "station_lat": config.get('latitude', 0.0),
                     "station_lon": config.get('longitude', 0.0),
                     "station_altitude": config.get('altitude', 0),
@@ -480,7 +486,8 @@ def heartbeat_worker():
                     "uptime": status["uptime"],
                     "disk_usage_percent": status.get("disk_usage_percent"),
                     "memory_usage_percent": status.get("memory_usage_percent"),
-                    "ogn_clients": status.get("ogn_clients"),
+                    "ogn_rf_running": status.get("ogn_rf_running"),
+                    "ogn_decode_running": status.get("ogn_decode_running"),
                     "timestamp": status["timestamp"]
                 }
             }
@@ -726,7 +733,9 @@ def health():
                 'memory_usage_percent': status.get('memory_usage_percent')
             },
             'ogn': {
-                'clients': status.get('ogn_clients'),
+                'status': status.get('ogn_status', 'unknown'),
+                'rf_running': status.get('ogn_rf_running'),
+                'decode_running': status.get('ogn_decode_running'),
                 'web_ui': f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else f"http://{get_ip()}:8080"
             },
             'hfss': {
