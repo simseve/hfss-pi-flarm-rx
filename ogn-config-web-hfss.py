@@ -653,7 +653,8 @@ def hfss_register():
                     "callsign": config.get('call', 'NOCALL'),
                     "vpn_ip": status.get("vpn_ip"),
                     "api_endpoint": f"http://{status.get('vpn_ip')}:8082" if status.get('vpn_ip') else None,
-                    "ogn_web_ui": f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else None
+                    "ogn_web_ui": f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else None,
+                    "registered_at": status.get("timestamp")
                 }
             }
         }
