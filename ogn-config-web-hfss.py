@@ -437,6 +437,14 @@ def get_station_status():
     except:
         status["ogn_clients"] = None
 
+    # WireGuard VPN IP
+    try:
+        result = subprocess.run(['ip', 'addr', 'show', 'wg0'], capture_output=True, text=True, timeout=2)
+        vpn_match = re.search(r'inet ([\d.]+)', result.stdout)
+        status["vpn_ip"] = vpn_match.group(1) if vpn_match else None
+    except:
+        status["vpn_ip"] = None
+
     return status
 
 def heartbeat_worker():
@@ -465,6 +473,9 @@ def heartbeat_worker():
                     "station_lat": config.get('latitude', 0.0),
                     "station_lon": config.get('longitude', 0.0),
                     "station_altitude": config.get('altitude', 0),
+                    "vpn_ip": status.get("vpn_ip"),
+                    "api_endpoint": f"http://{status.get('vpn_ip')}:8082" if status.get('vpn_ip') else None,
+                    "ogn_web_ui": f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else None,
                     "cpu_temp": status["cpu_temp"],
                     "uptime": status["uptime"],
                     "disk_usage_percent": status.get("disk_usage_percent"),
@@ -681,6 +692,51 @@ def heartbeat_logs():
         return jsonify({'success':True,'logs':heartbeat_history})
     except Exception as e:
         return jsonify({'success':False,'message':str(e),'logs':[]})
+
+@app.route('/api/health')
+def health():
+    """Health check endpoint with station status"""
+    try:
+        config = read_config()
+        status = get_station_status()
+        wifi = get_wifi_status()
+        hfss = get_hfss_status()
+
+        return jsonify({
+            'status': 'ok',
+            'timestamp': status['timestamp'],
+            'station': {
+                'callsign': config.get('call', 'NOCALL'),
+                'location': {
+                    'latitude': config.get('latitude', 0.0),
+                    'longitude': config.get('longitude', 0.0),
+                    'altitude': config.get('altitude', 0)
+                },
+                'vpn_ip': status.get('vpn_ip'),
+                'local_ip': get_ip()
+            },
+            'system': {
+                'cpu_temp': status.get('cpu_temp'),
+                'uptime': status.get('uptime'),
+                'disk_usage_percent': status.get('disk_usage_percent'),
+                'memory_usage_percent': status.get('memory_usage_percent')
+            },
+            'ogn': {
+                'clients': status.get('ogn_clients'),
+                'web_ui': f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else f"http://{get_ip()}:8080"
+            },
+            'hfss': {
+                'registered': hfss['is_registered'],
+                'heartbeat_running': hfss['heartbeat_status'] == 'Running',
+                'last_heartbeat': hfss.get('last_heartbeat', 'Never')
+            },
+            'network': {
+                'wlan0': wifi['wlan0_status'],
+                'eth1': wifi['eth1_status']
+            }
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__=='__main__':
     # Load heartbeat history

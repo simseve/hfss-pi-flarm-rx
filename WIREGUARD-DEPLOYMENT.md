@@ -1,338 +1,263 @@
-# WireGuard Deployment Guide for OGN Fleet
+# WireGuard VPN Deployment for OGN Stations
 
-This guide explains how to deploy thousands of OGN ground stations connected via WireGuard VPN over cellular connections.
+Deploy thousands of OGN ground stations with cellular connectivity via WireGuard VPN.
 
 ## Architecture
 
 ```
-[Your WireGuard Server]                    [OGN Station Fleet]
-Public IP: x.x.x.x               ←─────    Station 1 (10.0.0.2) via SIM
-VPN Network: 10.0.0.0/16         ←─────    Station 2 (10.0.0.3) via SIM
-                                 ←─────    Station N (10.0.x.x) via SIM
+[WireGuard Server - Docker]          [OGN Station Fleet]
+vilnius (89.47.162.7)      ←─────    Station 1 (10.13.13.12) via WiFi/SIM
+VPN: 10.13.13.1                      Station 2 (10.13.13.13) via SIM
+Port: 51820/UDP                      Station N (10.13.13.x) via SIM
+
          ↑
+         │ VPN Tunnel
          │
-   [Your Laptop/Admin]
-   Access any station via VPN
+   [Your Device]
+   Connect to any station remotely
 ```
 
-## Prerequisites
+## Server: vilnius (89.47.162.7)
 
-### Server Requirements
-- Linux server with public static IP (VPS, cloud instance, or home server with port forwarding)
-- WireGuard installed and configured
-- Port 51820/UDP open in firewall
-- Root/sudo access
+**WireGuard runs in Docker container**
+- Network: `10.13.13.0/24`
+- Server IP: `10.13.13.1`
+- Endpoint: `89.47.162.7:51820`
+- Location: `~/apps/wireguard_vpn/`
 
-### Client Requirements (Per OGN Station)
-- Raspberry Pi with cellular modem or SIM card hat
-- Internet connectivity via SIM card
-- SSH access for initial setup
-
-## Quick Start
-
-### 1. Server Setup (One-time)
-
-Ensure your WireGuard server is running:
+### Provision New Station
 
 ```bash
-# Check WireGuard status
-sudo systemctl status wg-quick@wg0
+# SSH to vilnius
+ssh ubuntu@vilnius
+cd ~/apps/wireguard_vpn
 
-# View current config
-sudo cat /etc/wireguard/wg0.conf
+# Provision station (e.g., station ID 2)
+./wireguard-docker-provision-station.sh 2 ogn-milan
 
-# Get your public IP or domain
-curl ifconfig.me
+# Creates: peers/ogn-milan.conf with IP 10.13.13.13
+# Restarts container automatically
 ```
 
-Your server config should have IP forwarding enabled:
+**IP Assignment:** Station ID `N` → IP `10.13.13.{N+11}`
+- Station 1 → 10.13.13.12
+- Station 2 → 10.13.13.13
+- Max 243 stations on current /24 network
+
+### View Connected Stations
 
 ```bash
-# Check IP forwarding
-sysctl net.ipv4.ip_forward  # Should be 1
+# SSH to vilnius
+ssh ubuntu@vilnius
 
-# If not, enable it
-echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
+# List all peers
+docker exec wireguard wg show
+
+# Active connections (handshake < 3min)
+docker exec wireguard wg show wg0 latest-handshakes | awk '{if ($2 > systime() - 180) print}'
+
+# Container status
+cd ~/apps/wireguard_vpn && docker-compose ps
 ```
 
-### 2. Provision Single Station
+## Client: Raspberry Pi Setup
 
-On your **WireGuard server**, run:
+### Install WireGuard (One-time per Pi)
 
+1. **Copy config from vilnius:**
 ```bash
-cd /path/to/hfss-pi-flarm-rx
-chmod +x wireguard-provision-station.sh
-sudo ./wireguard-provision-station.sh 1 ogn-zurich
+scp ubuntu@vilnius:~/apps/wireguard_vpn/peers/ogn-milan.conf pi@<pi-ip>:~/
 ```
 
-This will:
-- Generate unique keys for the station
-- Assign IP: 10.0.0.2 (station ID 1)
-- Create config file: `station-configs/ogn-zurich.conf`
-- Add peer to server config
-- Reload WireGuard server
-
-### 3. Provision Multiple Stations (Bulk)
-
-For deploying 100 stations at once:
-
+2. **Install on Pi:**
 ```bash
-chmod +x wireguard-bulk-provision.sh
-sudo ./wireguard-bulk-provision.sh 1 100 ogn-europe
-```
-
-This creates configs for stations 1-100:
-- `station-configs/ogn-europe-0001.conf` (10.0.0.2)
-- `station-configs/ogn-europe-0002.conf` (10.0.0.3)
-- ...
-- `station-configs/ogn-europe-0100.conf` (10.0.0.101)
-
-### 4. Deploy to Raspberry Pi
-
-**Method A: Manual Installation**
-
-1. Copy config and setup script to the Pi:
-```bash
-scp station-configs/ogn-europe-0001.conf pi@192.168.1.100:~/
-scp wireguard-client-setup.sh pi@192.168.1.100:~/
-```
-
-2. SSH to Pi and install:
-```bash
-ssh pi@192.168.1.100
+ssh pi@<pi-ip>
 chmod +x wireguard-client-setup.sh
-sudo ./wireguard-client-setup.sh ogn-europe-0001.conf
+sudo ./wireguard-client-setup.sh ogn-milan.conf
 ```
 
-3. Test connection:
+**VPN Auto-Start:** ✅ Enabled by default
+- Service: `wg-quick@wg0`
+- Starts on boot automatically
+- Keeps persistent connection (keepalive every 25s)
+
+### Verify Connection
+
 ```bash
-ping 10.0.0.1  # Ping WireGuard server
+# On Pi - check status
+sudo systemctl status wg-quick@wg0
+sudo wg show
+
+# Test connectivity
+ping 10.13.13.1  # Ping vilnius VPN server
 ```
 
-**Method B: SD Card Image (Recommended for bulk deployment)**
+## Access Stations Remotely
 
-Create a master SD card image with WireGuard pre-installed:
+### Connect to Your VPN First
 
-1. Install base system on one Pi
-2. Install WireGuard client setup script
-3. Create systemd service to auto-detect and load config on first boot
-4. Clone SD card image
-5. Before deploying each Pi, mount SD card and copy unique `.conf` file
+**Option 1: Install WireGuard on your laptop**
+- Download peer config from `vilnius:~/apps/wireguard_vpn/peers/`
+- Import to WireGuard client (Windows/Mac/Linux)
 
-### 5. Access Stations Remotely
+**Option 2: SSH tunnel via vilnius**
+```bash
+# SSH to station via vilnius
+ssh -J ubuntu@vilnius hfss@10.13.13.12
+```
 
-Once connected via WireGuard, you can access any station from anywhere:
+### Access Station Services
+
+Once on VPN network:
 
 ```bash
-# SSH to station
-ssh hfss@10.0.0.2  # Station 1
-ssh hfss@10.0.0.3  # Station 2
+# SSH to any station
+ssh hfss@10.13.13.12  # Station 1
+ssh hfss@10.13.13.13  # Station 2
 
-# Access OGN web interface
-curl http://10.0.0.2:8080  # Station 1
-firefox http://10.0.0.42:8080  # Station 42
+# Access OGN web UI
+open http://10.13.13.12:8080  # Station 1
 
 # Check OGN logs
-ssh hfss@10.0.0.2 'sudo journalctl -u ogn-rf -f'
+ssh hfss@10.13.13.12 'sudo journalctl -u ogn-rf -f'
 
-# View live data
-ssh hfss@10.0.0.2 'telnet localhost 50000'
+# View live APRS data
+ssh hfss@10.13.13.12 'telnet localhost 50001'
 ```
 
-## IP Address Allocation
+## API Endpoint: Station Registry
 
-The scripts allocate IPs as follows:
+**Coming soon:** REST API to list all stations with metadata
 
-- **Server**: 10.0.0.1
-- **Station 1**: 10.0.0.2
-- **Station 2**: 10.0.0.3
-- **Station 254**: 10.0.1.0
-- **Station 255**: 10.0.1.1
-- **Maximum**: 10.0.255.254 (65,534 stations)
+```bash
+# Planned endpoint on vilnius
+curl http://89.47.162.7:8000/api/stations
 
-Formula: Station ID `N` → IP `10.0.{N/254}.{(N%254)+2}`
+# Returns:
+# [
+#   {
+#     "id": 1,
+#     "name": "ogn-flarm-test",
+#     "vpn_ip": "10.13.13.12",
+#     "callsign": "HfssHq2",
+#     "location": {"lat": 45.97316, "lon": 8.87516},
+#     "online": true,
+#     "last_seen": "2025-11-16T22:15:30Z"
+#   }
+# ]
+```
+
+This will allow your app to:
+- Discover all stations dynamically
+- Get VPN IP for each station
+- Check online/offline status
+- Display on map with clickable access
 
 ## Management Commands
 
-### Server Side
+### Server (vilnius)
 
 ```bash
-# View all connected peers
-sudo wg show
+# View all peers
+docker exec wireguard wg show
 
-# View specific peer
-sudo wg show wg0 peers
-
-# Count active connections
-sudo wg show wg0 | grep peer | wc -l
-
-# Reload config without disconnect
-sudo wg syncconf wg0 <(wg-quick strip wg0)
-
-# Full restart
-sudo systemctl restart wg-quick@wg0
-```
-
-### Client Side (on Pi)
-
-```bash
-# Check WireGuard status
-sudo systemctl status wg-quick@wg0
-
-# View connection details
-sudo wg show
-
-# Restart connection
-sudo systemctl restart wg-quick@wg0
+# Restart WireGuard
+cd ~/apps/wireguard_vpn && docker-compose restart
 
 # View logs
-sudo journalctl -u wg-quick@wg0 -f
+docker logs wireguard -f
+
+# Count stations
+docker exec wireguard wg show wg0 peers | wc -l
+```
+
+### Client (Pi)
+
+```bash
+# VPN status
+sudo systemctl status wg-quick@wg0
+
+# Connection details
+sudo wg show
+
+# Restart VPN
+sudo systemctl restart wg-quick@wg0
+
+# Enable auto-start (already enabled by setup script)
+sudo systemctl enable wg-quick@wg0
+
+# Disable auto-start
+sudo systemctl disable wg-quick@wg0
 ```
 
 ## Troubleshooting
 
-### Station can't connect
+### Pi can't connect to VPN
 
-1. **Check server firewall**:
+1. **Check internet connection:**
 ```bash
-# Server
-sudo ufw allow 51820/udp
-sudo iptables -L -n | grep 51820
+ping 8.8.8.8
+curl ifconfig.me  # Should show public IP
 ```
 
-2. **Check client routing**:
+2. **Check endpoint reachability:**
 ```bash
-# Pi
-ip route show
-ping 10.0.0.1
+nc -vzu 89.47.162.7 51820  # Should succeed
 ```
 
-3. **Verify peer added to server**:
+3. **View WireGuard logs:**
 ```bash
-# Server
-sudo wg show wg0 | grep -A 2 "peer: <PUBLIC_KEY>"
+sudo journalctl -u wg-quick@wg0 -f
 ```
 
-4. **Check cellular connection**:
+4. **Verify config:**
 ```bash
-# Pi
-ping -c 3 8.8.8.8
-curl ifconfig.me
+sudo cat /etc/wireguard/wg0.conf
+# Endpoint should be: 89.47.162.7:51820
 ```
 
-### High data usage on cellular
+### Server doesn't see peer
 
-WireGuard is very efficient, but you can optimize:
-
+1. **Check if peer added to config:**
 ```bash
-# Increase keepalive interval (in client config)
-PersistentKeepalive = 60  # Instead of 25
-
-# Monitor data usage
-vnstat -i wg0
+ssh ubuntu@vilnius
+cat ~/apps/wireguard_vpn/config/wg_confs/wg0.conf | grep -A 3 "10.13.13.12"
 ```
 
-### Station unreachable after connection
-
-Check NAT/firewall rules on server:
-
+2. **Restart container:**
 ```bash
-# Server - ensure traffic forwarding is enabled
-sudo iptables -A FORWARD -i wg0 -j ACCEPT
-sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+cd ~/apps/wireguard_vpn && docker-compose restart
 ```
 
-## Monitoring Dashboard
+### VPN connected but can't ping server
 
-Create a simple monitoring script:
-
+**Firewall issue** - check container network:
 ```bash
-#!/bin/bash
-# monitor-fleet.sh
-
-echo "OGN Fleet Status - $(date)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-TOTAL=$(sudo wg show wg0 peers | wc -l)
-ACTIVE=$(sudo wg show wg0 latest-handshakes | awk '{if ($2 > systime() - 180) print $1}' | wc -l)
-
-echo "Total configured: $TOTAL"
-echo "Active (last 3min): $ACTIVE"
-echo ""
-
-# List offline stations
-echo "Offline stations:"
-sudo wg show wg0 latest-handshakes | awk '{if ($2 < systime() - 180) print $1}' | while read peer; do
-    grep -B 1 "$peer" /etc/wireguard/wg0.conf | grep "# OGN"
-done
+docker exec wireguard iptables -L -n
 ```
 
-## Scaling Considerations
+## Files
 
-### Small Fleet (1-100 stations)
-- Single VPS (2GB RAM, 1 CPU core) is sufficient
-- Cost: $5-10/month
+- **wireguard-docker-provision-station.sh** - Provision new station on vilnius
+- **wireguard-client-setup.sh** - Install WireGuard on Pi
+- **WIREGUARD-DEPLOYMENT.md** - This documentation
 
-### Medium Fleet (100-1000 stations)
-- VPS with 4GB RAM, 2 CPU cores
-- Consider monitoring with Prometheus/Grafana
-- Cost: $20-40/month
+## Security Notes
 
-### Large Fleet (1000+ stations)
-- Dedicated server or cloud instance (8GB+ RAM)
-- Multiple WireGuard servers with DNS load balancing
-- Centralized logging (ELK stack, Loki)
-- Automated health checks
-- Cost: $50-100/month
-
-## Security Best Practices
-
-1. **Key Management**: Store private keys securely, never commit to git
-2. **Firewall**: Only expose port 51820/UDP on server
-3. **Access Control**: Restrict SSH access to VPN network only
-4. **Updates**: Keep WireGuard updated on all devices
-5. **Monitoring**: Alert on unusual traffic patterns
-
-## Integration with OGN Monitoring
-
-You can create a dashboard that shows:
-- All stations on live.glidernet.org map
-- WireGuard connection status per station
-- Data throughput per station
-- Alert on disconnected stations
-
-Example integration:
-```bash
-# Check if station is online on OGN network
-curl "https://live.glidernet.org/api/stations" | grep HfssHq2
-```
-
-## Cost Estimate (1000 Stations)
-
-| Item | Cost |
-|------|------|
-| WireGuard VPS (dedicated) | $40/month |
-| SIM cards (1000 × $5/month) | $5,000/month |
-| Raspberry Pi hardware (one-time) | ~$80,000 |
-| **Total recurring** | **$5,040/month** |
-
-Main cost is cellular data. Consider:
-- Negotiate bulk SIM card rates
-- Use IoT-specific data plans (cheaper for low bandwidth)
-- Share SIM costs with local gliding clubs
+1. **Never commit private keys** to git
+2. **Peer configs contain secrets** - stored in `vilnius:~/apps/wireguard_vpn/peers/`
+3. **VPN gives full network access** - only share configs with trusted devices
+4. **Firewall on vilnius** - only port 51820/UDP exposed publicly
 
 ## Next Steps
 
-1. Test with 1-2 stations first
-2. Verify remote access and OGN data flow
-3. Create master SD card image for bulk deployment
-4. Set up monitoring dashboard
-5. Scale to full fleet
+1. ✅ Test connection with station 1 (ogn-flarm-test @ 10.13.13.12)
+2. Create station registry API endpoint
+3. Build web dashboard for fleet management
+4. Scale to multiple stations with SIM cards
+5. Monitor data usage and optimize keepalive intervals
 
 ## Support
 
-For issues specific to:
-- **OGN system**: See [CLAUDE.md](CLAUDE.md)
-- **WireGuard**: https://www.wireguard.com/
-- **Raspberry Pi**: https://www.raspberrypi.org/forums/
+- **WireGuard docs:** https://www.wireguard.com/
+- **OGN setup:** See [CLAUDE.md](CLAUDE.md)
