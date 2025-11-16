@@ -622,6 +622,7 @@ def hfss_register():
     try:
         d=request.json
         config = read_config()
+        status = get_station_status()
 
         token = generate_registration_token(
             d['station_id'],
@@ -642,7 +643,10 @@ def hfss_register():
                     "is_station": True,
                     "station_type": "OGN_RECEIVER",
                     "raspberry_pi": True,
-                    "callsign": config.get('call', 'NOCALL')
+                    "callsign": config.get('call', 'NOCALL'),
+                    "vpn_ip": status.get("vpn_ip"),
+                    "api_endpoint": f"http://{status.get('vpn_ip')}:8082" if status.get('vpn_ip') else None,
+                    "ogn_web_ui": f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else None
                 }
             }
         }
