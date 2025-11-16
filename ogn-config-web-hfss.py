@@ -247,7 +247,7 @@ def read_config():
         if m:=re.search(r'Latitude\s*=\s*([\d.-]+)',content):config['latitude']=float(m.group(1))
         if m:=re.search(r'Longitude\s*=\s*([\d.-]+)',content):config['longitude']=float(m.group(1))
         if m:=re.search(r'Altitude\s*=\s*([\d.-]+)',content):config['altitude']=int(float(m.group(1)))
-        if m:=re.search(r'FreqCorr\s*=\s*([\d.-]+)',content):config['freqcorr']=float(m.group(1))
+        if m:=re.search(r'FreqCorr\s*=\s*([+\d.-]+)',content):config['freqcorr']=float(m.group(1))
         if m:=re.search(r'OGN:.*?CenterFreq\s*=\s*([\d.]+)',content,re.DOTALL):config['centerfreq']=float(m.group(1))
         if m:=re.search(r'OGN:.*?Gain\s*=\s*([\d.]+)',content,re.DOTALL):config['gain']=float(m.group(1))
     except:pass
