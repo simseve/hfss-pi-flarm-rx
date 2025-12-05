@@ -96,7 +96,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;letter-spacing:1px}
 .status.error{background:rgba(255,0,110,0.1);color:#ff006e;border-color:rgba(255,0,110,0.3)}
 .info-box{background:rgba(0,166,251,0.05);border-left:4px solid #00a6fb;padding:16px;margin-bottom:20px;border-radius:6px}
 .info-box strong{color:#00ffff}
-iframe{width:100%;height:600px;border:1px solid rgba(0,255,255,0.2);border-radius:8px;margin-top:20px;background:#0a0e1a}
+iframe{width:100%;height:600px;border:1px solid rgba(0,255,255,0.2);border-radius:8px;margin-top:20px;background:#f5f5f5}
 .wifi-status{display:inline-block;padding:6px 12px;border-radius:6px;font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.5px}
 .wifi-on{background:rgba(20,241,149,0.2);color:#14f195;border:1px solid rgba(20,241,149,0.4)}
 .wifi-off{background:rgba(255,0,110,0.2);color:#ff006e;border:1px solid rgba(255,0,110,0.4)}
