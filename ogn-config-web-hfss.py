@@ -63,11 +63,57 @@ def get_default_hfss_config():
         'manufacturer_secret': load_env_var('MANUFACTURER_SECRET_OGN') or ''
     }
 
-# HTML Template (keeping original, adding HFSS section at end)
+# HTML Template with Neon Cyberpunk Styling
 HTML = '''<!DOCTYPE html>
-<html><head><title>OGN Config</title><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background:#f0f2f5;padding:20px}.container{max-width:1200px;margin:0 auto;background:white;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}.header{background:#2c3e50;color:white;padding:20px}.header h1{font-size:24px;margin-bottom:5px}.content{padding:20px}.form-section{background:#f8f9fa;padding:20px;border-radius:6px;margin-bottom:20px}.form-section h2{font-size:18px;margin-bottom:15px;color:#2c3e50}.form-group{margin-bottom:15px}.form-group label{display:block;margin-bottom:5px;font-weight:bold;color:#555}.form-group input,.form-group select{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:14px}.btn{background:#3498db;color:white;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-right:10px}.btn:hover{background:#2980b9}.btn-danger{background:#e74c3c}.btn-danger:hover{background:#c0392b}.btn-success{background:#27ae60}.btn-success:hover{background:#229954}.status{padding:15px;border-radius:4px;margin-bottom:20px}.status.success{background:#d4edda;color:#155724}.status.error{background:#f8d7da;color:#721c24}.info-box{background:#e8f4f8;border-left:4px solid #3498db;padding:15px;margin-bottom:20px}iframe{width:100%;height:600px;border:1px solid #ddd;border-radius:6px;margin-top:20px}.wifi-status{display:inline-block;padding:5px 10px;border-radius:4px;font-weight:bold}.wifi-on{background:#d4edda;color:#155724}.wifi-off{background:#f8d7da;color:#721c24}.network-list{list-style:none;padding:0}.network-item{background:white;padding:15px;margin:10px 0;border:1px solid #ddd;border-radius:4px;display:flex;justify-content:space-between;align-items:center}.network-item .network-info{flex:1}.network-item .network-ssid{font-weight:bold;color:#2c3e50}.network-item .network-status{font-size:12px;color:#7f8c8d;margin-top:5px}.btn-small{padding:8px 16px;font-size:14px}.hfss-status{padding:10px;border-radius:4px;margin:10px 0;font-weight:bold}.hfss-registered{background:#d4edda;color:#155724}.hfss-notregistered{background:#fff3cd;color:#856404}</style>
-</head><body><div class="container"><div class="header"><h1>OGN Receiver Configuration</h1></div>
+<html><head><title>OGN Config - Alpium</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Rajdhani',sans-serif;background:#0a0e1a;color:#fff;padding:20px;min-height:100vh}
+h1,h2,h3{font-family:'Orbitron',monospace;letter-spacing:1px}
+.container{max-width:1200px;margin:0 auto;background:rgba(15,20,32,0.95);border-radius:12px;box-shadow:0 0 40px rgba(0,255,255,0.15);border:1px solid rgba(0,255,255,0.2);overflow:hidden}
+.header{background:linear-gradient(135deg,rgba(15,20,32,0.98),rgba(20,26,40,0.98));color:#00ffff;padding:24px;border-bottom:2px solid rgba(0,255,255,0.3);position:relative}
+.header::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#00ffff,transparent);animation:glow-line 3s ease-in-out infinite}
+.header h1{font-size:28px;margin-bottom:5px;text-shadow:0 0 20px rgba(0,255,255,0.8),0 0 40px rgba(0,255,255,0.4)}
+.content{padding:24px}
+.form-section{background:rgba(20,26,40,0.6);padding:24px;border-radius:10px;margin-bottom:24px;border:1px solid rgba(0,255,255,0.2);transition:all 0.3s ease}
+.form-section:hover{border-color:rgba(0,255,255,0.4);box-shadow:0 0 20px rgba(0,255,255,0.1)}
+.form-section h2{font-size:22px;margin-bottom:20px;color:#00ffff;text-shadow:0 0 10px rgba(0,255,255,0.6)}
+.form-group{margin-bottom:18px}
+.form-group label{display:block;margin-bottom:8px;font-weight:600;color:#00a6fb;font-size:14px;text-transform:uppercase;letter-spacing:0.5px}
+.form-group input,.form-group select{width:100%;padding:12px;border:1px solid rgba(0,166,251,0.3);border-radius:6px;font-size:14px;background:rgba(10,14,26,0.8);color:#fff;font-family:'Rajdhani',sans-serif;transition:all 0.3s ease}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:#00ffff;box-shadow:0 0 15px rgba(0,255,255,0.3)}
+.btn{background:linear-gradient(135deg,#00a6fb,#0080c8);color:#fff;padding:12px 28px;border:none;border-radius:6px;cursor:pointer;font-size:16px;margin-right:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;transition:all 0.3s ease;font-family:'Orbitron',monospace}
+.btn:hover{transform:translateY(-2px);box-shadow:0 0 25px rgba(0,166,251,0.6);background:linear-gradient(135deg,#00c0ff,#00a6fb)}
+.btn-danger{background:linear-gradient(135deg,#ff006e,#c8005a)}
+.btn-danger:hover{box-shadow:0 0 25px rgba(255,0,110,0.6);background:linear-gradient(135deg,#ff2080,#ff006e)}
+.btn-success{background:linear-gradient(135deg,#14f195,#0ac97a)}
+.btn-success:hover{box-shadow:0 0 25px rgba(20,241,149,0.6);background:linear-gradient(135deg,#20ff9e,#14f195)}
+.status{padding:16px;border-radius:8px;margin-bottom:20px;border:1px solid;font-weight:600}
+.status.success{background:rgba(20,241,149,0.1);color:#14f195;border-color:rgba(20,241,149,0.3)}
+.status.error{background:rgba(255,0,110,0.1);color:#ff006e;border-color:rgba(255,0,110,0.3)}
+.info-box{background:rgba(0,166,251,0.05);border-left:4px solid #00a6fb;padding:16px;margin-bottom:20px;border-radius:6px}
+.info-box strong{color:#00ffff}
+iframe{width:100%;height:600px;border:1px solid rgba(0,255,255,0.2);border-radius:8px;margin-top:20px;background:#0a0e1a}
+.wifi-status{display:inline-block;padding:6px 12px;border-radius:6px;font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:0.5px}
+.wifi-on{background:rgba(20,241,149,0.2);color:#14f195;border:1px solid rgba(20,241,149,0.4)}
+.wifi-off{background:rgba(255,0,110,0.2);color:#ff006e;border:1px solid rgba(255,0,110,0.4)}
+.network-list{list-style:none;padding:0}
+.network-item{background:rgba(20,26,40,0.5);padding:16px;margin:12px 0;border:1px solid rgba(0,166,251,0.2);border-radius:8px;display:flex;justify-content:space-between;align-items:center;transition:all 0.3s ease}
+.network-item:hover{border-color:rgba(0,255,255,0.4);box-shadow:0 0 15px rgba(0,255,255,0.1)}
+.network-item .network-info{flex:1}
+.network-item .network-ssid{font-weight:700;color:#00ffff;font-size:16px}
+.network-item .network-status{font-size:12px;color:#adb5bd;margin-top:4px}
+.btn-small{padding:8px 18px;font-size:13px}
+.hfss-status{padding:12px;border-radius:8px;margin:12px 0;font-weight:700;text-transform:uppercase;letter-spacing:1px;border:2px solid}
+.hfss-registered{background:rgba(20,241,149,0.1);color:#14f195;border-color:rgba(20,241,149,0.4);animation:pulse-glow 2s ease-in-out infinite}
+.hfss-notregistered{background:rgba(153,69,255,0.1);color:#9945ff;border-color:rgba(153,69,255,0.4)}
+@keyframes glow-line{0%,100%{opacity:0.5;transform:scaleX(0.8)}50%{opacity:1;transform:scaleX(1)}}
+@keyframes pulse-glow{0%,100%{box-shadow:0 0 10px rgba(20,241,149,0.3)}50%{box-shadow:0 0 20px rgba(20,241,149,0.6)}}
+</style>
+</head><body><div class="container"><div class="header"><h1>⚡ OGN Receiver Configuration - Alpium</h1></div>
 <div class="content"><div id="status"></div>
 
 <div class="form-section">
