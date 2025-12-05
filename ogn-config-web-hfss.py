@@ -57,7 +57,7 @@ def get_default_hfss_config():
     serial = get_raspberry_pi_serial()
 
     return {
-        'server_url': load_env_var('HFSS_SERVER_URL') or 'https://dg-dev.hikeandfly.app',
+        'server_url': load_env_var('HFSS_SERVER_URL') or 'https://app.alpium.io',
         'station_id': f'OGN_STATION_{serial}',
         'station_name': config.get('call', 'NOCALL'),
         'manufacturer_secret': load_env_var('MANUFACTURER_SECRET_OGN') or ''
