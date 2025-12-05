@@ -129,8 +129,8 @@ iframe{width:100%;height:600px;border:1px solid rgba(0,255,255,0.2);border-radiu
 <button class="btn" onclick="viewHeartbeatLogs()">View Heartbeat Logs</button>
 <button class="btn btn-danger" onclick="unregisterHFSS()">Unregister</button>
 <div id="heartbeat-logs" style="display:none;margin-top:20px;">
-<h3>Heartbeat Logs (Last 1000)</h3>
-<div id="logs-container" style="max-height:400px;overflow-y:auto;background:#f8f9fa;padding:10px;border-radius:4px;font-family:monospace;font-size:12px;"></div>
+<h3 style="color:#00ffff;font-size:18px;margin-bottom:12px;">Heartbeat Logs (Last 1000)</h3>
+<div id="logs-container" style="max-height:400px;overflow-y:auto;background:rgba(10,14,26,0.6);padding:12px;border-radius:8px;font-family:monospace;font-size:12px;border:1px solid rgba(0,166,251,0.2);"></div>
 </div>
 {% else %}
 <form id="hfssForm">
@@ -227,11 +227,11 @@ const logsDiv=document.getElementById('logs-container');
 logsDiv.innerHTML='';
 j.logs.reverse().forEach(log=>{
 const entry=document.createElement('div');
-entry.style.cssText='margin-bottom:15px;padding:10px;background:white;border-radius:4px;border:1px solid #ddd';
-const statusColor=log.response_status===200?'green':log.response_status===0?'orange':'red';
+entry.style.cssText='margin-bottom:15px;padding:12px;background:rgba(20,26,40,0.5);border-radius:8px;border:1px solid rgba(0,166,251,0.2)';
+const statusColor=log.response_status===200?'#14f195':log.response_status===0?'#9945ff':'#ff006e';
 const toggleId='log-'+Math.random().toString(36).substr(2,9);
 const header=document.createElement('div');
-header.style.marginBottom='8px';
+header.style.marginBottom='10px';
 header.innerHTML='<strong style="color:'+statusColor+'">'+log.timestamp+'</strong> - <span style="font-weight:bold;color:'+statusColor+'">Status: '+log.response_status+'</span>';
 const btn=document.createElement('button');
 btn.className='btn btn-small';
@@ -241,14 +241,14 @@ const details=document.createElement('div');
 details.id=toggleId;
 details.style.cssText='display:none;margin-top:10px';
 const payloadPre=document.createElement('pre');
-payloadPre.style.cssText='background:#f8f9fa;padding:8px;border-radius:4px;overflow-x:auto;font-size:11px';
+payloadPre.style.cssText='background:rgba(10,14,26,0.8);padding:10px;border-radius:6px;overflow-x:auto;font-size:11px;color:#adb5bd;border:1px solid rgba(0,166,251,0.2)';
 payloadPre.textContent=JSON.stringify(log.payload,null,2);
 const respPre=document.createElement('pre');
-respPre.style.cssText='background:#f8f9fa;padding:8px;border-radius:4px;overflow-x:auto;font-size:11px;margin-top:8px';
+respPre.style.cssText='background:rgba(10,14,26,0.8);padding:10px;border-radius:6px;overflow-x:auto;font-size:11px;margin-top:10px;color:#adb5bd;border:1px solid rgba(0,166,251,0.2)';
 respPre.textContent=log.response_text;
-details.innerHTML='<strong>Payload:</strong>';
+details.innerHTML='<strong style="color:#00a6fb;">Payload:</strong>';
 details.appendChild(payloadPre);
-details.innerHTML+='<strong>Response:</strong>';
+details.innerHTML+='<strong style="color:#00a6fb;display:block;margin-top:12px;">Response:</strong>';
 details.appendChild(respPre);
 entry.appendChild(header);
 entry.appendChild(btn);
