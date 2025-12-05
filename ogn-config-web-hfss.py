@@ -71,7 +71,7 @@ HTML = '''<!DOCTYPE html>
 <div class="content"><div id="status"></div>
 
 <div class="form-section">
-<h2>HFSS Registration</h2>
+<h2>Alpium Registration</h2>
 <div class="hfss-status {{hfss.status_class}}">Status: {{hfss.status_text}}</div>
 {% if hfss.is_registered %}
 <div class="info-box">
@@ -92,7 +92,7 @@ HTML = '''<!DOCTYPE html>
 <div class="form-group"><label>Station ID</label><input name="station_id" value="{{hfss_defaults.station_id}}" pattern="^OGN_STATION_.+" required readonly></div>
 <div class="form-group"><label>Station Name</label><input name="station_name" value="{{hfss_defaults.station_name}}" required></div>
 <div class="form-group"><label>Manufacturer Secret</label><input type="password" name="manufacturer_secret" value="{{hfss_defaults.manufacturer_secret}}" required></div>
-<button type="submit" class="btn">Register with HFSS</button>
+<button type="submit" class="btn">Register with Alpium</button>
 </form>
 {% endif %}
 </div>
@@ -166,7 +166,7 @@ fetch('/api/wifi/edit',{method:'POST',headers:{'Content-Type':'application/json'
 if(j.success)setTimeout(()=>location.reload(),1500);});
 }
 async function unregisterHFSS(){
-if(!confirm('Unregister from HFSS? Heartbeat will stop.'))return;
+if(!confirm('Unregister from Alpium? Heartbeat will stop.'))return;
 const r=await fetch('/api/hfss/unregister',{method:'POST'});
 const j=await r.json();document.getElementById('status').innerHTML='<div class="status '+(j.success?'success':'error')+'">'+j.message+'</div>';
 if(j.success)setTimeout(()=>location.reload(),1500);
