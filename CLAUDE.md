@@ -55,22 +55,9 @@ This installer:
 - Sets up FIFO pipes with proper permissions
 - Works on Pi Zero 2W, Pi 3, Pi 4, and Pi 5 (32-bit or 64-bit)
 
-### Legacy Installation (Not Recommended for Debian 13+)
+## Production Deployment
 
-The installation script (`ogn_installation_script.sh`) in this repo handles:
-1. System updates and dependency installation
-2. RTL-SDR driver compilation with udev rules
-3. Blacklisting conflicting DVB-T kernel modules
-4. Downloading architecture-specific OGN binaries (ARM64 or ARM32)
-5. Creating systemd services for auto-start
-6. Generating helper scripts in ~/ogn directory
-
-**Run installation (Debian 11 or older only):**
-```bash
-sudo ./ogn_installation_script.sh
-```
-
-**WARNING**: This script downloads Bullseye binaries which **will not work** on Debian 13 Trixie.
+For production IoT fleet deployment with Cloudflare Zero Trust and Tailscale VPN, see [PRODUCTION-DEPLOYMENT.md](PRODUCTION-DEPLOYMENT.md).
 
 ## Common Commands
 
