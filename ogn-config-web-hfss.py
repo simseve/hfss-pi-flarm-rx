@@ -63,6 +63,21 @@ def get_raspberry_pi_serial():
         pass
     return 'UNKNOWN'
 
+def get_tailscale_ip():
+    """Get Tailscale IP address if available"""
+    try:
+        result = subprocess.run(
+            ['tailscale', 'ip', '-4'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    return None
+
 def get_default_hfss_config():
     """Get default HFSS configuration with auto-populated values"""
     config = read_config()
@@ -522,6 +537,7 @@ def heartbeat_worker():
             config = read_config()
             status = get_station_status()
             serial = get_raspberry_pi_serial()
+            tailscale_ip = get_tailscale_ip()
 
             payload = {
                 "device_id": creds["device_id"],
@@ -539,9 +555,10 @@ def heartbeat_worker():
                     "station_lon": config.get('longitude', 0.0),
                     "station_altitude": config.get('altitude', 0),
                     "device_serial": serial,
+                    "vpn_ip": tailscale_ip,
                     "ssh_hostname": f"ssh_{serial}.alpium.io",
-                    "web_server_url": f"https://web_ogn.alpium.io",
-                    "ogn_web_ui_url": f"https://ogn_ogn.alpium.io",
+                    "web_server_url": f"http://{tailscale_ip}:8082" if tailscale_ip else f"https://web_ogn.alpium.io",
+                    "ogn_web_ui_url": f"http://{tailscale_ip}:8080" if tailscale_ip else f"https://ogn_ogn.alpium.io",
                     "cpu_temp": status["cpu_temp"],
                     "uptime": status["uptime"],
                     "disk_usage_percent": status.get("disk_usage_percent"),
