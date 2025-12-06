@@ -1,0 +1,16 @@
+# Environment variables with secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
+*.log
+nohup.out
+
+# OGN specific
+ogn-rf.fifo

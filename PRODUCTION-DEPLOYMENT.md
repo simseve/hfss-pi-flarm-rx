@@ -158,6 +158,7 @@ HFSS_SERVER_URL=https://ogn.alpium.io/api/v1
 CF_ACCESS_CLIENT_ID=3e7da9e5eb83a5ffc00d6abb7aa6ab7a.access
 CF_ACCESS_CLIENT_SECRET=64806145af6fd811d2f9db3e1b130761b87f4667a41bbcfc1532be31a6039157
 TS_AUTHKEY=tskey-auth-kXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXX
+SSH_PUBLIC_KEY_OGN=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvt5QkiKFZ3c6pPZWqQP530cg/sbqah7MPYXz1059RE alpium-ogn-access
 EOF
 ```
 
@@ -358,9 +359,10 @@ CF_CLIENT_SECRET="64806145af6fd811d2f9db3e1b130761b87f4667a41bbcfc1532be31a60391
 MANUFACTURER_SECRET="DpJGWXuPInyF7LXtiTlLt7tWgB_A0sUtNpL0km4Tyb4"
 SERVER_URL="https://ogn.alpium.io/api/v1"
 TAILSCALE_KEY="tskey-auth-kXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXX"
+SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOvt5QkiKFZ3c6pPZWqQP530cg/sbqah7MPYXz1059RE alpium-ogn-access"
 
 # 1. Update .env file
-echo "1/5 Configuring environment..."
+echo "1/6 Configuring environment..."
 cd ~/hfss-pi-flarm-rx
 cat > .env << EOF
 MANUFACTURER_SECRET_OGN=$MANUFACTURER_SECRET
@@ -368,11 +370,24 @@ HFSS_SERVER_URL=$SERVER_URL
 CF_ACCESS_CLIENT_ID=$CF_CLIENT_ID
 CF_ACCESS_CLIENT_SECRET=$CF_CLIENT_SECRET
 TS_AUTHKEY=$TAILSCALE_KEY
+SSH_PUBLIC_KEY_OGN=$SSH_PUBLIC_KEY
 EOF
 echo "   ✓ Environment configured"
 
-# 2. Install Tailscale
-echo "2/5 Installing Tailscale..."
+# 2. Deploy SSH key for Alpium access
+echo "2/6 Deploying SSH key for seamless Alpium access..."
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+if ! grep -q "alpium-ogn-access" ~/.ssh/authorized_keys 2>/dev/null; then
+    echo "$SSH_PUBLIC_KEY" >> ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+    echo "   ✓ SSH key deployed"
+else
+    echo "   ✓ SSH key already deployed"
+fi
+
+# 3. Install Tailscale
+echo "3/6 Installing Tailscale..."
 if ! command -v tailscale &> /dev/null; then
     curl -fsSL https://tailscale.com/install.sh | sh
     echo "   ✓ Tailscale installed"
@@ -380,23 +395,23 @@ else
     echo "   ✓ Tailscale already installed"
 fi
 
-# 3. Connect to Tailscale
-echo "3/5 Connecting to Tailscale network..."
+# 4. Connect to Tailscale
+echo "4/6 Connecting to Tailscale network..."
 SERIAL=$(cat /proc/cpuinfo | grep Serial | awk '{print $3}' | tail -c 9)
 sudo tailscale up --authkey=$TAILSCALE_KEY --hostname=ogn-$SERIAL
 TAILSCALE_IP=$(tailscale ip -4)
 echo "   ✓ Connected with IP: $TAILSCALE_IP"
 
-# 4. Update OGN software
-echo "4/5 Updating OGN software..."
+# 5. Update OGN software
+echo "5/6 Updating OGN software..."
 git pull
 sudo pkill -f ogn-config-web-hfss.py || true
 sleep 2
 nohup sudo python3 ogn-config-web-hfss.py > /dev/null 2>&1 &
 echo "   ✓ OGN software updated and running"
 
-# 5. Verify deployment
-echo "5/5 Verifying deployment..."
+# 6. Verify deployment
+echo "6/6 Verifying deployment..."
 sleep 5
 
 # Check Tailscale
