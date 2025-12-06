@@ -217,8 +217,7 @@ iframe{width:100%;height:600px;border:1px solid rgba(0,255,255,0.2);border-radiu
 <div class="form-group"><label>Freq Correction (PPM)</label><input type="number" name="freqcorr" value="{{config.freqcorr}}" step="0.1"></div>
 <div class="form-group"><label>Center Freq (MHz)</label><input type="number" name="centerfreq" value="{{config.centerfreq}}" step="0.1"></div>
 <div class="form-group"><label>Gain (dB)</label><input type="number" name="gain" value="{{config.gain}}" step="0.1"></div></div>
-<button type="submit" class="btn" id="b">Save & Restart</button></form>
-<iframe src="http://{{ip}}:8080"></iframe></div></div>
+<button type="submit" class="btn" id="b">Save & Restart</button></form></div></div>
 <script>
 async function toggleWifi(iface,action){
 const r=await fetch('/api/wifi/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interface:iface,action:action})});
@@ -636,7 +635,7 @@ def get_hfss_status():
 
 @app.route('/')
 def index():
-    return render_template_string(HTML,config=read_config(),ip=get_ip(),wifi=get_wifi_status(),hfss=get_hfss_status(),hfss_defaults=get_default_hfss_config())
+    return render_template_string(HTML,config=read_config(),wifi=get_wifi_status(),hfss=get_hfss_status(),hfss_defaults=get_default_hfss_config())
 
 @app.route('/api/save',methods=['POST'])
 def save():
