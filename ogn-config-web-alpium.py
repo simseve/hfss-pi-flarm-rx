@@ -358,8 +358,15 @@ HTTP:
     except:return False
 
 def get_ip():
-    try:return subprocess.run(['hostname','-I'],capture_output=True,text=True).stdout.strip().split()[0]
-    except:return 'localhost'
+    # Prefer Tailscale IP for iframe (works over VPN)
+    tailscale_ip = get_tailscale_ip()
+    if tailscale_ip:
+        return tailscale_ip
+    # Fallback to local IP
+    try:
+        return subprocess.run(['hostname','-I'],capture_output=True,text=True).stdout.strip().split()[0]
+    except:
+        return 'localhost'
 
 def get_wifi_status():
     status = {'wlan0_status':'unknown','eth1_status':'unknown','wlan0_ip':'N/A','eth1_ip':'N/A','networks':[]}
