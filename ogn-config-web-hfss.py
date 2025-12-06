@@ -40,6 +40,18 @@ def load_env_var(var_name):
         pass
     return None
 
+def get_cloudflare_headers():
+    """Get Cloudflare Access service token headers if configured"""
+    headers = {}
+    client_id = load_env_var('CF_ACCESS_CLIENT_ID')
+    client_secret = load_env_var('CF_ACCESS_CLIENT_SECRET')
+
+    if client_id and client_secret:
+        headers['CF-Access-Client-Id'] = client_id
+        headers['CF-Access-Client-Secret'] = client_secret
+
+    return headers
+
 def get_raspberry_pi_serial():
     """Get Raspberry Pi CPU serial number"""
     try:
@@ -509,6 +521,7 @@ def heartbeat_worker():
 
             config = read_config()
             status = get_station_status()
+            serial = get_raspberry_pi_serial()
 
             payload = {
                 "device_id": creds["device_id"],
@@ -525,9 +538,10 @@ def heartbeat_worker():
                     "station_lat": config.get('latitude', 0.0),
                     "station_lon": config.get('longitude', 0.0),
                     "station_altitude": config.get('altitude', 0),
-                    "vpn_ip": status.get("vpn_ip"),
-                    "api_endpoint": f"http://{status.get('vpn_ip')}:8082" if status.get('vpn_ip') else None,
-                    "ogn_web_ui": f"http://{status.get('vpn_ip')}:8080" if status.get('vpn_ip') else None,
+                    "device_serial": serial,
+                    "ssh_hostname": f"ssh_{serial}.alpium.io",
+                    "web_server_url": f"https://web_ogn.alpium.io",
+                    "ogn_web_ui_url": f"https://ogn_ogn.alpium.io",
                     "cpu_temp": status["cpu_temp"],
                     "uptime": status["uptime"],
                     "disk_usage_percent": status.get("disk_usage_percent"),
@@ -539,8 +553,11 @@ def heartbeat_worker():
             }
 
             response = requests.post(
-                f"{creds['server_url']}/api/v1/gps/",
-                headers={"Authorization": f"Bearer {creds['api_key']}"},
+                f"{creds['server_url']}/gps/",
+                headers={
+                    "Authorization": f"Bearer {creds['api_key']}",
+                    **get_cloudflare_headers()
+                },
                 json=payload,
                 timeout=10
             )
@@ -706,7 +723,8 @@ def hfss_register():
         }
 
         response = requests.post(
-            f"{d['server_url']}/api/v1/devices/register",
+            f"{d['server_url']}/devices/register",
+            headers=get_cloudflare_headers(),
             json=payload,
             timeout=30
         )
