@@ -216,8 +216,8 @@ cd ~/hfss-pi-flarm-rx
 git pull
 
 # Restart service
-sudo pkill -f ogn-config-web-hfss.py
-nohup sudo python3 ogn-config-web-hfss.py > /dev/null 2>&1 &
+sudo pkill -f ogn-config-web-alpium.py
+nohup sudo python3 ogn-config-web-alpium.py > /dev/null 2>&1 &
 ```
 
 ---
@@ -405,9 +405,9 @@ echo "   ✓ Connected with IP: $TAILSCALE_IP"
 # 5. Update OGN software
 echo "5/6 Updating OGN software..."
 git pull
-sudo pkill -f ogn-config-web-hfss.py || true
+sudo pkill -f ogn-config-web-alpium.py || true
 sleep 2
-nohup sudo python3 ogn-config-web-hfss.py > /dev/null 2>&1 &
+nohup sudo python3 ogn-config-web-alpium.py > /dev/null 2>&1 &
 echo "   ✓ OGN software updated and running"
 
 # 6. Verify deployment
@@ -422,7 +422,7 @@ else
 fi
 
 # Check OGN service
-if pgrep -f ogn-config-web-hfss.py > /dev/null; then
+if pgrep -f ogn-config-web-alpium.py > /dev/null; then
     echo "   ✓ OGN Service: RUNNING"
 else
     echo "   ✗ OGN Service: NOT RUNNING"
@@ -562,9 +562,9 @@ tail -20 ~/hfss-pi-flarm-rx/heartbeat.log
 ```bash
 # Update .env with correct credentials
 # Restart OGN service
-sudo pkill -f ogn-config-web-hfss.py
+sudo pkill -f ogn-config-web-alpium.py
 cd ~/hfss-pi-flarm-rx
-nohup sudo python3 ogn-config-web-hfss.py > /dev/null 2>&1 &
+nohup sudo python3 ogn-config-web-alpium.py > /dev/null 2>&1 &
 ```
 
 ### Cannot Access Device Web Interface
@@ -575,7 +575,7 @@ nohup sudo python3 ogn-config-web-hfss.py > /dev/null 2>&1 &
 tailscale ip -4
 
 # Check if web server is running
-ps aux | grep ogn-config-web-hfss.py
+ps aux | grep ogn-config-web-alpium.py
 
 # Test locally on Pi
 curl http://localhost:8082

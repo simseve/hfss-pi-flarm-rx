@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-OGN Config Web + HFSS Registration
-Enhanced Flask app with HFSS integration for Pi 3
+OGN Config Web + Alpium Registration
+Enhanced Flask app with Alpium integration for Pi 3
 """
 from flask import Flask, render_template_string, request, jsonify
 import re
@@ -22,7 +22,7 @@ CREDENTIALS_FILE = '/home/hfss/.ogn_credentials.json'
 ENV_FILE = '/home/hfss/hfss-pi-flarm-rx/.env'
 HEARTBEAT_LOG_FILE = '/home/hfss/.ogn_heartbeat_log.json'
 
-# HFSS Configuration
+# Alpium Configuration
 HEARTBEAT_INTERVAL = 300  # 5 minutes
 heartbeat_thread = None
 heartbeat_running = False
