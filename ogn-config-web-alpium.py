@@ -834,7 +834,23 @@ def health():
 if __name__=='__main__':
     # Load heartbeat history
     load_heartbeat_history()
-    # Start heartbeat if already registered
-    if load_credentials():
+
+    # Auto-register if not already registered
+    if not load_credentials():
+        print("Device not registered. Attempting auto-registration...")
+        try:
+            # Call registration endpoint
+            response = hfss_register()
+            if response[1] == 200:
+                print("Auto-registration successful!")
+                # Credentials are now saved, start heartbeat
+                start_heartbeat()
+            else:
+                print(f"Auto-registration failed: {response[0].get_json()}")
+        except Exception as e:
+            print(f"Auto-registration error: {e}")
+    else:
+        # Already registered, start heartbeat
         start_heartbeat()
+
     app.run(host='0.0.0.0',port=8082,debug=False)
