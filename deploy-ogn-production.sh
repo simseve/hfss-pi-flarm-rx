@@ -76,8 +76,21 @@ else
     echo "   Skipped (no SSH key provided)"
 fi
 
-# ===== Step 3: Install Tailscale =====
-echo "3/6 Installing Tailscale..."
+# ===== Step 3: Install OGN Receiver =====
+echo "3/7 Installing OGN receiver software..."
+if [ ! -d "$HOME/ogn-pi34" ]; then
+    cd ~
+    git clone https://github.com/VirusPilot/ogn-pi34.git
+    cd ogn-pi34
+    ./install-pi34.sh
+    echo "   OGN receiver installed"
+else
+    echo "   OGN receiver already installed"
+fi
+cd ~/hfss-pi-flarm-rx
+
+# ===== Step 4: Install Tailscale =====
+echo "4/7 Installing Tailscale..."
 if ! command -v tailscale &> /dev/null; then
     curl -fsSL https://tailscale.com/install.sh | sh
     echo "   Tailscale installed"
@@ -85,22 +98,22 @@ else
     echo "   Tailscale already installed"
 fi
 
-# ===== Step 4: Connect to Tailscale =====
-echo "4/6 Connecting to Tailscale network..."
+# ===== Step 5: Connect to Tailscale =====
+echo "5/7 Connecting to Tailscale network..."
 sudo tailscale up --authkey="$TS_AUTHKEY" --hostname="ogn-$SERIAL"
 TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "pending")
 echo "   Connected with IP: $TAILSCALE_IP"
 
-# ===== Step 5: Update OGN software =====
-echo "5/6 Updating OGN software..."
+# ===== Step 6: Start OGN Config Web Service =====
+echo "6/7 Starting OGN config web service..."
 git pull || echo "   Git pull skipped (not a git repo or no updates)"
 sudo pkill -f ogn-config-web-alpium.py || true
 sleep 2
 nohup sudo python3 ogn-config-web-alpium.py > /var/log/ogn-config-web.log 2>&1 &
-echo "   OGN software updated and running"
+echo "   OGN config web service started"
 
-# ===== Step 6: Verify deployment =====
-echo "6/6 Verifying deployment..."
+# ===== Step 7: Verify deployment =====
+echo "7/7 Verifying deployment..."
 sleep 5
 
 # Check Tailscale
@@ -110,11 +123,28 @@ else
     echo "   Tailscale: PENDING (may take a moment)"
 fi
 
-# Check OGN service
+# Check OGN services
 if pgrep -f ogn-config-web-alpium.py > /dev/null; then
-    echo "   OGN Config Service: RUNNING"
+    echo "   OGN Config Web: RUNNING"
 else
-    echo "   OGN Config Service: NOT RUNNING"
+    echo "   OGN Config Web: NOT RUNNING"
+fi
+
+OGN_RF_RUNNING=false
+OGN_DECODE_RUNNING=false
+
+if systemctl is-active --quiet ogn-rf 2>/dev/null; then
+    echo "   OGN RF Receiver: RUNNING"
+    OGN_RF_RUNNING=true
+else
+    echo "   OGN RF Receiver: NOT RUNNING"
+fi
+
+if systemctl is-active --quiet ogn-decode 2>/dev/null; then
+    echo "   OGN Decoder: RUNNING"
+    OGN_DECODE_RUNNING=true
+else
+    echo "   OGN Decoder: NOT RUNNING"
 fi
 
 # Get final Tailscale IP
@@ -134,3 +164,18 @@ echo "View device in Tailscale dashboard:"
 echo "https://login.tailscale.com/admin/machines"
 echo ""
 echo "Heartbeats will be sent to: $SERVER_URL/gps/"
+
+# Check if OGN services need configuration
+if [ "$OGN_RF_RUNNING" = false ] || [ "$OGN_DECODE_RUNNING" = false ]; then
+    echo ""
+    echo "=== ACTION REQUIRED ==="
+    echo "OGN receiver services are not running."
+    echo ""
+    echo "Please configure your station via the web interface:"
+    echo "  1. Open http://$TAILSCALE_IP:8082"
+    echo "  2. Set your station callsign, location, and RF settings"
+    echo "  3. Click 'Save & Restart' to start the OGN services"
+    echo ""
+    echo "After configuration, verify services with:"
+    echo "  sudo systemctl status ogn-rf ogn-decode"
+fi
