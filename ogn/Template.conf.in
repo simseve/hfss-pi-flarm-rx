@@ -1,0 +1,52 @@
+# OGN receiver configuration, written by the Alpium station agent
+# (ogn-config-web-alpium.py) from ogn/Template.conf.in. Edit through the
+# station UI; a hand edit here is overwritten by the next save there.
+# Based on VirusPilot/ogn-pi34 223d78c (OGN 0.3.3). Differences from upstream:
+# HTTP status pages on 8080 (RF) and 8081 (decoder), because the station
+# agent owns 8082, and APRS.Call is always set.
+
+RF:
+{
+  Async = 2;
+  Device   = 0;
+  FreqCorr = {freqcorr};
+  SampleRate = 2.0;
+  BiasTee  = 0;
+
+  GSM:
+  {
+    CenterFreq  =    0;
+    Gain        = 25.0;
+  };
+
+  OGN:
+  {
+    CenterFreq = {centerfreq};
+    Gain       = {gain};
+    MinNoise   =   2.0;
+    MaxNoise   =  10.0;
+  };
+};
+
+Demodulator:
+{
+  ScanMargin = 30.0;
+  DetectSNR  = 11.0;
+};
+
+Position:
+{
+  Latitude   = {latitude};
+  Longitude  = {longitude};
+  Altitude   = {altitude};
+};
+
+APRS:
+{
+  Call = "{call}";
+};
+
+HTTP:
+{
+  Port = 8080;
+};

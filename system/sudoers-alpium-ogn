@@ -1,0 +1,3 @@
+# The station agent (user hfss) may run the Alpium helper as root, and
+# nothing else. The helper validates every argument itself.
+hfss ALL=(root) NOPASSWD: /usr/local/sbin/alpium-ogn-helper

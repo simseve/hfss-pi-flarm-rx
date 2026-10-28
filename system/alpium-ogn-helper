@@ -1,0 +1,186 @@
+#!/usr/bin/python3 -I
+"""The only thing the station agent may run as root.
+
+Installed root-owned at /usr/local/sbin/alpium-ogn-helper; /etc/sudoers.d/
+alpium-ogn lets the `hfss` user run it and nothing else. Every subcommand
+validates its input here, because the agent is reachable from the tailnet and
+must not be able to turn a request into an arbitrary root command.
+
+  restart-ogn                  restart the OGN receiver service
+  link IFACE up|down           bring an interface up or down; refuses to take
+                               down the interface carrying the only default
+                               route (that would cut the station off)
+  wifi-list                    saved Wi-Fi networks as JSON
+  wifi-add      < JSON         {"ssid", "psk", "priority"}
+  wifi-set-psk  < JSON         {"name", "psk"}
+  wifi-delete NAME             delete a saved Wi-Fi network
+
+Wi-Fi is NetworkManager (Raspberry Pi OS Bookworm and Trixie). A password is
+written into a 0600 keyfile and never passed on a command line, where any
+local user could read it in the process list.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import uuid
+
+IFACES = {"wlan0", "eth0", "eth1"}
+NM_DIR = "/etc/NetworkManager/system-connections"
+OGN_SERVICE = "rtlsdr-ogn"
+
+
+def fail(message, code=1):
+    print(json.dumps({"success": False, "message": message}))
+    sys.exit(code)
+
+
+def ok(message, **extra):
+    print(json.dumps({"success": True, "message": message, **extra}))
+    sys.exit(0)
+
+
+def run(*args):
+    return subprocess.run(list(args), capture_output=True, text=True, timeout=30)
+
+
+def read_json():
+    try:
+        data = json.loads(sys.stdin.read(4096))
+    except ValueError:
+        fail("Invalid input")
+    if not isinstance(data, dict):
+        fail("Invalid input")
+    return data
+
+
+def valid_ssid(ssid):
+    # Printable, no characters a keyfile would need escaped.
+    return isinstance(ssid, str) and 1 <= len(ssid.encode()) <= 32 and \
+        re.fullmatch(r"[^\x00-\x1f\x7f\\;=\[\]]+", ssid) is not None and ssid == ssid.strip()
+
+
+def valid_psk(psk):
+    if not isinstance(psk, str):
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]{64}", psk):
+        return True
+    return 8 <= len(psk) <= 63 and re.fullmatch(r"[\x20-\x7e]+", psk) is not None \
+        and "\\" not in psk and psk == psk.strip()
+
+
+def require_nm():
+    if run("systemctl", "is-active", "--quiet", "NetworkManager").returncode != 0:
+        fail("Wi-Fi management needs NetworkManager, which is not running")
+
+
+def wifi_connections():
+    r = run("nmcli", "-t", "-f", "NAME,TYPE,AUTOCONNECT-PRIORITY", "connection", "show")
+    out = []
+    for line in r.stdout.splitlines():
+        # nmcli -t escapes ':' inside fields as '\:'.
+        parts = re.split(r"(?<!\\):", line)
+        if len(parts) >= 3 and parts[1] == "802-11-wireless":
+            out.append({"name": parts[0].replace("\\:", ":"), "priority": parts[2]})
+    return out
+
+
+def write_keyfile(ssid, psk, priority):
+    conn_uuid = str(uuid.uuid4())
+    path = os.path.join(NM_DIR, f"alpium-{conn_uuid}.nmconnection")
+    body = (
+        "[connection]\n"
+        f"id={ssid}\nuuid={conn_uuid}\ntype=wifi\ninterface-name=wlan0\n"
+        f"autoconnect-priority={priority}\n\n"
+        "[wifi]\nmode=infrastructure\n"
+        f"ssid={ssid}\n\n"
+        "[wifi-security]\nkey-mgmt=wpa-psk\n"
+        f"psk={psk}\n\n"
+        "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n"
+    )
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    if run("nmcli", "connection", "reload").returncode != 0:
+        os.unlink(path)
+        fail("NetworkManager refused the new network")
+
+
+def main(argv):
+    if not argv:
+        fail("No command")
+    cmd, args = argv[0], argv[1:]
+
+    if cmd == "restart-ogn" and not args:
+        r = run("systemctl", "restart", OGN_SERVICE)
+        if r.returncode != 0:
+            fail("Could not restart the OGN service")
+        ok("OGN receiver restarted")
+
+    if cmd == "link" and len(args) == 2 and args[0] in IFACES and args[1] in ("up", "down"):
+        iface, state = args
+        if state == "down":
+            routes = run("ip", "-o", "route", "show", "default").stdout.split("\n")
+            devs = {m.group(1) for line in routes if (m := re.search(r"\bdev (\S+)", line))}
+            if devs == {iface}:
+                fail(f"{iface} carries the only default route; taking it down would cut the station off")
+        if run("ip", "link", "set", iface, state).returncode != 0:
+            fail(f"Could not set {iface} {state}")
+        ok(f"{iface} {state}")
+
+    if cmd == "wifi-list" and not args:
+        require_nm()
+        ok("ok", networks=wifi_connections())
+
+    if cmd == "wifi-add" and not args:
+        require_nm()
+        d = read_json()
+        ssid, psk = d.get("ssid"), d.get("psk")
+        try:
+            priority = int(d.get("priority", 1))
+        except (TypeError, ValueError):
+            fail("Priority must be a number")
+        if not valid_ssid(ssid):
+            fail("Invalid SSID")
+        if not valid_psk(psk):
+            fail("Password must be 8-63 printable characters (no backslash) or 64 hex digits")
+        if not -999 <= priority <= 999:
+            fail("Priority out of range")
+        if any(c["name"] == ssid for c in wifi_connections()):
+            fail(f"A network named {ssid} already exists")
+        write_keyfile(ssid, psk, priority)
+        ok(f"Network {ssid} added")
+
+    if cmd == "wifi-set-psk" and not args:
+        require_nm()
+        d = read_json()
+        name, psk = d.get("name"), d.get("psk")
+        if not valid_psk(psk):
+            fail("Password must be 8-63 printable characters (no backslash) or 64 hex digits")
+        match = next((c for c in wifi_connections() if c["name"] == name), None)
+        if not match:
+            fail("Network not found")
+        ssid = run("nmcli", "-g", "802-11-wireless.ssid", "connection", "show", "id", name).stdout.strip()
+        if not valid_ssid(ssid):
+            fail("This network's SSID cannot be rewritten here")
+        if run("nmcli", "connection", "delete", "id", name).returncode != 0:
+            fail("Could not update the network")
+        write_keyfile(ssid, psk, int(match["priority"] or 0))
+        ok("Password updated")
+
+    if cmd == "wifi-delete" and len(args) == 1:
+        require_nm()
+        if not any(c["name"] == args[0] for c in wifi_connections()):
+            fail("Network not found")
+        if run("nmcli", "connection", "delete", "id", args[0]).returncode != 0:
+            fail("Could not delete the network")
+        ok("Network deleted")
+
+    fail("Unknown command")
+
+
+if __name__ == "__main__":
+    if os.geteuid() != 0:
+        fail("Must run as root (through sudo)")
+    main(sys.argv[1:])

@@ -1,0 +1,30 @@
+# The Alpium station agent: the station UI on :8082 (reached only over the
+# tailnet, see firewall.nft) and the heartbeat to Alpium. Runs as hfss; the
+# few root actions go through /usr/local/sbin/alpium-ogn-helper via sudo.
+# Restarted forever, so a crash or a power cut never leaves a station silent
+# until somebody re-runs the installer.
+[Unit]
+Description=Alpium OGN station agent
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+User=hfss
+Group=hfss
+WorkingDirectory=/home/hfss/hfss-pi-flarm-rx
+EnvironmentFile=-/etc/default/alpium-ogn-station
+ExecStart=/usr/bin/python3 -u /home/hfss/hfss-pi-flarm-rx/ogn-config-web-alpium.py
+Restart=always
+RestartSec=10
+# sudo for the helper needs privilege changes, so NoNewPrivileges stays off;
+# everything else is closed.
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=no
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

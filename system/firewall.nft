@@ -1,0 +1,41 @@
+#!/usr/sbin/nft -f
+# Inbound firewall of an Alpium OGN station (docs: PRODUCTION-DEPLOYMENT.md).
+#
+# The station sits on networks we do not control (a club house, a hut, a
+# farmer's router). Nothing it serves is for that network: the station UI
+# (8082), the OGN status pages (8080/8081) and procServ (50000/50001) are
+# reached only over the tailnet, where Tailscale ACLs decide who may connect.
+# On the local network only SSH is open (key-only, see sshd drop-in), for an
+# on-site rescue when Tailscale itself is down; install.sh --no-lan-ssh
+# closes it too.
+#
+# Outbound is untouched: the station must reach glidernet, Alpium, Tailscale.
+
+table inet alpium_ogn
+delete table inet alpium_ogn
+
+table inet alpium_ogn {
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    iif lo accept
+    ct state established,related accept
+    ct state invalid drop
+
+    # Neighbour discovery, ping, path MTU.
+    meta l4proto { icmp, ipv6-icmp } accept
+
+    # DHCP replies when not tracked as established.
+    udp sport 67 udp dport 68 accept
+    udp sport 547 udp dport 546 accept
+
+    # Everything on the tailnet; Tailscale ACLs filter it before it gets here.
+    iifname "tailscale0" accept
+
+    # Tailscale direct connections.
+    udp dport 41641 accept
+
+    # On-site SSH rescue (removed by install.sh --no-lan-ssh).
+    tcp dport 22 accept comment "lan-ssh"
+  }
+}

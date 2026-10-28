@@ -1,180 +1,149 @@
-# Production Deployment Guide - OGN Receiver
+# Running a fleet of Alpium OGN stations
 
-Quick setup guide for deploying OGN Raspberry Pi receivers with Tailscale VPN.
+How to install, enroll, operate and retire hundreds of Raspberry Pi OGN
+receivers, each reachable by Alpium over Tailscale and by nothing else. The
+server side is documented in the Alpium repo, `docs/OGN_STATIONS.md`.
 
-## Quick Start (For Friends)
+## The model
 
-### Prerequisites
-- Raspberry Pi 3/4/5 with 64-bit OS
-- RTL-SDR dongle
-- Internet connection (WiFi or Ethernet)
-- Provisioning passphrase (email repo owner to request)
+- **No shared secrets on a Pi.** A station joins with an **enrollment code**
+  an Alpium admin creates. Alpium answers with credentials that belong to this
+  station alone and a **single-use, pre-authorised Tailscale key** tagged
+  `tag:ogn`. Losing one Pi loses one station's credentials, which an admin
+  revokes with one click (Retire).
+- **Reachable over the tailnet only.** The station UI (8082), the OGN status
+  pages (8080/8081) and procServ (50000/50001) are closed to the local network
+  by the firewall; the agent also refuses non-tailnet clients itself. SSH is
+  key-only. Who on the tailnet may connect is decided by Tailscale ACLs.
+- **Survives reboots.** Everything is a systemd service.
+- **Alpium notices.** The agent sends a heartbeat every 5 minutes. A station
+  silent for 30 minutes raises a Sentry issue that says whether the Pi is
+  still on the tailnet (agent dead: SSH in) or not (power or network: send
+  someone).
 
-### Setup Steps
+## One-time setup
 
-**1. Flash Raspberry Pi OS (64-bit) to SD card**
+### 1. Tailscale policy (admin console, Access controls)
 
-**2. Boot the Pi and connect to internet**
+Without explicit rules the default policy lets every tailnet device reach every
+other one, so a stolen Pi could reach the Alpium server. Stations must reach
+nothing; only the server and the admins reach them:
 
-**3. Clone and deploy**
+```jsonc
+{
+  "tagOwners": {
+    "tag:ogn":           ["autogroup:admin", "tag:alpium-server"],
+    "tag:alpium-server": ["autogroup:admin"]
+  },
+  "grants": [
+    // Alpium's server and the admins may open a station's pages and shell.
+    { "src": ["tag:alpium-server", "autogroup:admin"],
+      "dst": ["tag:ogn"], "ip": ["tcp:22", "tcp:8080-8082"] }
+
+    // ...your other rules for people and servers. Do NOT add any rule whose
+    // src is tag:ogn: a station needs no inbound path to anything.
+  ]
+}
+```
+
+Tag the Alpium host `tag:alpium-server` (its machine page, Edit ACL tags).
+
+### 2. Tailscale OAuth client (Settings, OAuth clients)
+
+Scopes **Auth Keys: write** and **Devices Core: read + write**, tag
+`tag:ogn`. Paste the id and secret into Alpium, Admin, Secrets, category
+`ogn`: `TAILSCALE_OAUTH_CLIENT_ID`, `TAILSCALE_OAUTH_CLIENT_SECRET`. Until
+they are set, enrollment refuses every station with a 503.
+
+### 3. Retire the old secrets
+
+The previous provisioning handed every Pi the same `.env`. After the new code
+is deployed:
+
+- revoke the old **reusable** Tailscale auth key (Settings, Keys);
+- rotate the **OGN manufacturer secret** (Alpium, manufacturers table); it no
+  longer registers stations, and every old Pi held it;
+- clear `OGN_PROVISION_PASSPHRASE` and `OGN_PROVISION_CONFIG` in Alpium's
+  secrets (`/provision/ogn` now answers 410).
+
+Re-running `install.sh` on an old station shreds its `.env`.
+
+## Installing a station
+
+1. Flash **Raspberry Pi OS Lite (Trixie, Debian 13)**, 32 or 64 bit. In
+   Raspberry Pi Imager, set a user, Wi-Fi if needed, and **your SSH public
+   key** (password SSH is switched off by the installer).
+2. Get a code: Alpium, `/admin/ogn-stations`, *Enroll new stations*. One code
+   per station, or one code for N stations when flashing a batch on a bench
+   (short validity). Codes are shown once.
+3. On the Pi:
+
 ```bash
-git clone https://github.com/simone/hfss-pi-flarm-rx.git
-cd hfss-pi-flarm-rx
-./deploy-ogn-production.sh
+sudo apt-get install -y git
+sudo git clone https://github.com/simseve/hfss-pi-flarm-rx /home/hfss/hfss-pi-flarm-rx
+cd /home/hfss/hfss-pi-flarm-rx
+sudo ./install.sh --code OGN-XXXX-XXXX-XXXX-XXXX \
+     --callsign MYSITE --lat 46.0123 --lon 8.9123 --alt 1250
 ```
 
-**4. Enter the passphrase when prompted**
-```
-Enter the provisioning passphrase (ask Alpium admin):
-Passphrase: ********
-```
+The callsign follows http://wiki.glidernet.org/receiver-naming-convention.
+Position and callsign can also be set later in the station UI. The station
+shows up in Alpium within 5 minutes, as `OGN_STATION_<serial>` on the tailnet
+as `ogn-<serial>`.
 
-The script automatically:
-1. Fetches all credentials from Alpium API
-2. Deploys SSH keys for remote access
-3. Installs OGN receiver software (via [ogn-pi34](https://github.com/VirusPilot/ogn-pi34))
-4. Installs and connects Tailscale VPN
-5. Starts the OGN config web service
-6. Verifies all services are running
+| Option | Effect |
+|---|---|
+| `--no-lan-ssh` | SSH from the tailnet only (no on-site rescue over the LAN) |
+| `--keep-ssh-passwords` | leave sshd's password login on |
+| `--skip-ogn` | do not reinstall the OGN binaries |
+| `--enroll-url URL` | another Alpium instance |
 
-**5. Configure the receiver via web UI**
+## Operating
 
-Open `http://<tailscale-ip>:8082` to configure:
-- Station callsign
-- Location (latitude/longitude/altitude)
-- RF settings (frequency, gain)
+- **Open a station**: Alpium console, Station UI / OGN Demodulator / SSH.
+  The console pins each station's Tailscale address after checking it against
+  the tailnet, and the Pi's SSH host key on first connection.
+- **Update a station**: on the Pi, as an admin user (not hfss, which has no
+  sudo by design): `cd /home/hfss/hfss-pi-flarm-rx && sudo git pull && sudo ./install.sh`.
+  Without `--code` it keeps the enrollment and re-applies agent, units,
+  helper and firewall.
+- **Reinstalled Pi / new SD card**: run the installer with a new code. The
+  old credentials stop working, the old tailnet node is removed, and the
+  console's pins reset.
+- **Lost or stolen**: Alpium console, Retire. Credentials revoked, tailnet
+  node deleted, no more alerts.
 
-**6. Done!** Your device will appear in the Tailscale dashboard and on [live.glidernet.org](https://live.glidernet.org) after 10-15 minutes.
+## What runs on a station
 
----
+| Unit | What | User |
+|---|---|---|
+| `rtlsdr-ogn` | ogn-rf + ogn-decode under procServ (OGN 0.3.3, pinned + checksummed) | hfss |
+| `alpium-ogn-station` | agent: heartbeat + UI on :8082 | hfss |
+| `alpium-ogn-firewall` | nftables table `inet alpium_ogn` | root, oneshot |
+| `tailscaled` | tailnet node `ogn-<serial>`, tag:ogn | root |
 
-## Architecture Overview
+The agent's only root access is `/usr/local/sbin/alpium-ogn-helper` (restart
+the receiver, Wi-Fi through NetworkManager keyfiles, interface up/down with a
+refusal to drop the last default route), allowed by `/etc/sudoers.d/alpium-ogn`.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  OGN Raspberry Pi Fleet                     │
-└────────┬────────────────────────────────────────────┬───────┘
-         │                                            │
-         │ HTTPS + Service Token                      │ Tailscale VPN
-         │ (Heartbeats & Registration)                │ (Device Access)
-         ▼                                            ▼
-┌─────────────────────┐                    ┌─────────────────────┐
-│  Cloudflare Access  │                    │  Tailscale Network  │
-│  ogn.alpium.io      │                    │  VPN Mesh           │
-└──────────┬──────────┘                    └──────────┬──────────┘
-           │                                          │
-           ▼                                          ▼
-    ┌─────────────────────────────────────────────────────┐
-    │            Alpium Management Server                 │
-    │  - React Dashboard (view all devices)              │
-    │  - Access devices via Tailscale IPs                │
-    └─────────────────────────────────────────────────────┘
-```
-
----
-
-## For Administrators
-
-### Provisioning System
-
-The deploy script fetches credentials from:
-```
-GET https://ogn.alpium.io/api/v1/provision/ogn
-Header: X-Provision-Key: <passphrase>
-```
-
-This returns the `.env` file containing:
-- `MANUFACTURER_SECRET_OGN` - Device registration secret
-- `SERVER_URL` - Alpium API endpoint
-- `CF_ACCESS_CLIENT_ID` - Cloudflare service token
-- `CF_ACCESS_CLIENT_SECRET` - Cloudflare secret
-- `TS_AUTHKEY` - Tailscale auth key (reusable, preauthorized)
-- `SSH_PUBLIC_KEY_OGN` - SSH key for remote access
-
-### Tailscale Auth Key
-
-Generate at https://login.tailscale.com/admin/settings/keys:
-- **Reusable**: ON (same key for all devices)
-- **Preauthorized**: ON (auto-approve devices)
-- **Expiration**: 90 days
-
-Note: Key expires in 90 days, but connected devices stay connected forever.
-
-### Cloudflare Access
-
-The `/provision/ogn` endpoint must bypass Cloudflare Access:
-1. Create separate application for `/api/v1/provision/ogn`
-2. Set policy to Bypass for Everyone
-3. The passphrase provides authentication
-
-### Changing the Passphrase
-
-To rotate the passphrase:
-1. Update your FastAPI server with new passphrase
-2. Share new passphrase with authorized users
-3. Existing devices are unaffected (already have `.env`)
-
----
+Files: `~hfss/.ogn_credentials.json` (0600, this station's credentials),
+`~hfss/rtlsdr-ogn/Template.conf` (receiver settings, written by the UI from
+`ogn/Template.conf.in`), `/etc/alpium-ogn/firewall.nft`.
 
 ## Troubleshooting
 
-### Device Not Connecting to Tailscale
 ```bash
-sudo systemctl status tailscaled
+systemctl status alpium-ogn-station rtlsdr-ogn tailscaled
+journalctl -u alpium-ogn-station -n 50
+curl -s http://127.0.0.1:8082/api/health | python3 -m json.tool
 tailscale status
-sudo journalctl -u tailscaled -n 50
+sudo nft list table inet alpium_ogn
+telnet localhost 50000      # ogn-rf console
+telnet localhost 50001      # ogn-decode console
+rtl_test -t                 # is the dongle seen
 ```
 
-### Provisioning Fails with 401
-- Check passphrase is correct
-- Verify endpoint is accessible: `curl https://ogn.alpium.io/api/v1/provision/ogn`
-
-### Heartbeat Fails with 403
-- Cloudflare service token may be expired
-- Re-run deploy script to fetch fresh credentials
-
-### Cannot Access Device Web Interface
-```bash
-# On the Pi
-tailscale ip -4          # Get Tailscale IP
-curl http://localhost:8082   # Test locally
-```
-
----
-
-## Manual Operations
-
-### Re-deploy credentials
-```bash
-cd ~/hfss-pi-flarm-rx
-rm .env
-./deploy-ogn-production.sh
-```
-
-### Check service status
-```bash
-sudo systemctl status ogn-rf
-sudo systemctl status ogn-decode
-tailscale status
-```
-
-### View logs
-```bash
-sudo journalctl -u ogn-rf -f
-sudo journalctl -u ogn-decode -f
-```
-
----
-
-## Costs
-
-| Service | Free Tier | Paid |
-|---------|-----------|------|
-| Tailscale | 100 devices | $48/year unlimited |
-| Cloudflare Access | Unlimited service tokens | $0 |
-
-**Total for 1000+ devices: $48/year**
-
----
-
-**Last Updated**: 2026-01-04
+- Heartbeat 401/403: credentials revoked (station retired or re-enrolled
+  elsewhere). Re-enroll with a new code.
+- Not on the tailnet after enrollment: the single-use key expired (1 hour)
+  before `tailscale up` ran. Re-run the installer with a new code.

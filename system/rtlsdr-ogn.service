@@ -1,0 +1,22 @@
+# OGN receiver (ogn-rf + ogn-decode under procServ), VirusPilot/ogn-pi34
+# 223d78c's unit with /home/pi replaced by /home/hfss. The processes run as
+# hfss (see /etc/rtlsdr-ogn.conf). Restart=no is upstream's, because the
+# start script forks and supervises; the agent's heartbeat reports when
+# either process is down.
+[Unit]
+Description=OGN Receiver Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+WorkingDirectory=/home/hfss/rtlsdr-ogn
+ExecStart=/home/hfss/rtlsdr-ogn/rtlsdr-ogn start
+ExecStop=/home/hfss/rtlsdr-ogn/rtlsdr-ogn stop
+ExecReload=/home/hfss/rtlsdr-ogn/rtlsdr-ogn reload
+RemainAfterExit=yes
+Restart=no
+SyslogIdentifier=rtlsdr-ogn
+
+[Install]
+WantedBy=multi-user.target

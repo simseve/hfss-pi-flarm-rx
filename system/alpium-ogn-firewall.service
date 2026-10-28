@@ -1,0 +1,15 @@
+# Loads the station's inbound firewall before the network comes up.
+[Unit]
+Description=Alpium OGN station firewall
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/alpium-ogn/firewall.nft
+ExecStop=/usr/sbin/nft delete table inet alpium_ogn
+
+[Install]
+WantedBy=multi-user.target
