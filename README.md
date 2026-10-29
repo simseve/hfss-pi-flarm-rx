@@ -19,7 +19,8 @@ station waits for approval in `/admin/ogn-stations`. Needs Raspberry Pi OS Lite 
 (Bookworm) is accepted so a station already in the field converts in place.
 
 Everything else, from the Tailscale policy to retiring a lost station, is in
-[PRODUCTION-DEPLOYMENT.md](PRODUCTION-DEPLOYMENT.md).
+[PRODUCTION-DEPLOYMENT.md](PRODUCTION-DEPLOYMENT.md), including the release
+runbook (*Releasing a new version*: publish, image, sign).
 
 ## Layout
 

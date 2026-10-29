@@ -185,35 +185,94 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   database does not know: set PIN/APN in Alpium, *Manage → Network*, over
   another network (your field hotspot) once.
 
-## Building the image
+## Releasing a new version (runbook)
 
-The `Station image` workflow builds it for every published release
-(`tools/build-image.sh`, GitHub arm64 runner) and attaches it with
-`image-info.json`. Then, on the release machine:
+Every new station version is a **signed release**, and every release also
+gets a **signed card image**. Both signatures are made on the release
+machine (Simone's Mac), the only place that holds the offline release key.
+Nothing else can make a release: not Alpium, not GitHub, not a station.
+
+**What you need, once**
+
+| What | Where |
+|---|---|
+| Release key (private, OFFLINE) | `~/.ssh/alpium_ogn_release_ed25519` on the release Mac. Back it up in the password manager; add a passphrase with `ssh-keygen -p -f ~/.ssh/alpium_ogn_release_ed25519` (the script asks for it). |
+| Its public half | `system/release-signing.pub` here, `/etc/alpium-ogn/release.pub` on every station, `RELEASE_PUBLIC_KEY` in Alpium's `app/services/ogn_station_release.py` |
+| This repo, cloned | `~/apps/hfss-pi-flarm-rx` |
+| Python with `cryptography` | Alpium's venv: `~/Apps/hfss-digi/.venv/bin/python` |
+| GitHub CLI, logged in | `gh auth status` (account simseve) |
+
+Below, `PY=~/Apps/hfss-digi/.venv/bin/python`.
+
+**1. Prepare the version**
+
+Bump `AGENT_VERSION` in `ogn-station-agent.py` (e.g. `3.3.3` to `3.3.4`),
+commit, push to `main`. The version must be new: stations refuse anything
+not newer than what they run.
+
+**2. Publish the release (about 10 seconds)**
 
 ```bash
-python3 tools/make-release.py --sign-image v3.3.0
+cd ~/apps/hfss-pi-flarm-rx && git pull
+rm -f .DS_Store            # Finder's file makes the tree "dirty" and the script refuses
+$PY tools/make-release.py --dry-run   # optional: build and sign into dist/, publish nothing
+$PY tools/make-release.py
 ```
 
-Alpium offers an image to Imager only once that signature is published.
+It packages HEAD (`git archive`), signs `manifest.json` (version, commit,
+tarball URL and sha256) and creates the GitHub release `vX.Y.Z` with the
+tarball, `manifest.json` and `manifest.sig`. Ends with `published vX.Y.Z`.
 
-## Releasing
+**3. Wait for the card image (about 5 minutes)**
 
-On the release machine, which holds the offline release key
-(`~/.ssh/alpium_ogn_release_ed25519`; its public half is
-`system/release-signing.pub`):
+Publishing starts the `Station image` workflow (`.github/workflows/
+station-image.yml`, `tools/build-image.sh`): the official Raspberry Pi OS
+Lite 64-bit, checksum-verified, plus this release installed with
+`install.sh --image`, attached to the release as
+`alpium-ogn-station-X.Y.Z.img.xz` with `image-info.json`. Follow it with:
 
 ```bash
-# bump AGENT_VERSION in ogn-station-agent.py, commit, push, then
-python3 tools/make-release.py --dry-run   # build + sign into dist/, check
-python3 tools/make-release.py             # tag vX.Y.Z and publish with gh
+gh run list --repo simseve/hfss-pi-flarm-rx --workflow station-image.yml --limit 1
 ```
 
-The release is `git archive` of HEAD plus `manifest.json` (version, commit,
-tarball URL, sha256) and `manifest.sig`. Nothing else can make a release: not
-Alpium, not a station. Lose the key and stations can still be updated by
-hand; leak it and rotate it (a release signed by the old key that ships the
-new public key).
+**4. Sign the image (about 5 seconds)**
+
+```bash
+$PY tools/make-release.py --sign-image vX.Y.Z
+```
+
+Downloads only `image-info.json` (never the 700 MB image), signs a
+`manifest-image.json` from its checksums and uploads it with
+`manifest-image.sig`. Ends with `signed image of vX.Y.Z`.
+
+**5. Check and roll out**
+
+- Imager lists the image within 5 minutes (Alpium's cache):
+  `curl -s https://app.alpium.io/api/v1/ogn-stations/imager.json` shows
+  `Alpium OGN station X.Y.Z`. An empty `os_list` means the image is not
+  signed yet, or its signature did not verify.
+- Existing stations: Alpium, `/admin/ogn-stations`, *Station software*: pick
+  the version, *Select 3 outdated (canary)*, *Update selected*; check they
+  report the new version (Manage, Status), then *Select all outdated online*.
+
+**When something goes wrong**
+
+| Message | Meaning, fix |
+|---|---|
+| `Working tree not clean` | A local change or `.DS_Store`: commit, or `rm -f .DS_Store` |
+| `Tag vX.Y.Z exists` | That version was released already: bump `AGENT_VERSION` |
+| `No image-info.json on vX.Y.Z yet` | The image is still building (step 3): wait, sign again |
+| The image workflow failed | Read it: `gh run view <id> --repo simseve/hfss-pi-flarm-rx --log-failed`. Fix the build on `main` and rebuild the SAME release without a new version: `gh workflow run station-image.yml --repo simseve/hfss-pi-flarm-rx -f tag=vX.Y.Z` (the script comes from `main`, the image content from the tag) |
+| A station refuses the update | `Release signature does not verify` (wrong key) or `not newer` (version) in its update log, Manage, Status |
+
+**If the key is lost or leaked**
+
+Lost: stations can still be updated by hand (`sudo ./install.sh` on each).
+Make a new key, put its public half in `system/release-signing.pub` and in
+Alpium's `RELEASE_PUBLIC_KEY`, and reinstall stations by hand once.
+Leaked: rotate while you still control the old key: a release signed with the
+OLD key whose `system/release-signing.pub` is the NEW one, rolled out to the
+fleet; then switch Alpium's `RELEASE_PUBLIC_KEY`.
 
 ## What runs on a station
 

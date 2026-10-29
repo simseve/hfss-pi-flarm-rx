@@ -64,7 +64,7 @@ def sign_image(tag, key_path):
         got = subprocess.run(["gh", "release", "download", tag, "--repo", REPO, "--pattern", "image-info.json",
                               "--dir", tmp])
         if got.returncode != 0:
-            sys.exit(f"No image-info.json on {tag} yet: the Station image workflow builds it in 20-30 minutes "
+            sys.exit(f"No image-info.json on {tag} yet: the Station image workflow builds it in about 5 minutes "
                      f"after the release (gh run list --repo {REPO} --workflow station-image.yml).")
         info = json.load(open(os.path.join(tmp, "image-info.json")))
     if f"v{info['version']}" != tag:
