@@ -10,6 +10,13 @@ station's interface (its admin console, /admin/ogn-stations). Two jobs:
    install.sh at enrollment). A fixed set of typed fields: Alpium refuses
    unknown ones. Never /gps/, which is for positions and refuses stations.
    Alpium's console and its silence alert are built on this.
+   A station with no credentials yet (a freshly flashed station image, or
+   install.sh run without --code) CLAIMS instead: it generates its own
+   Ed25519 claim key, posts its serial signed with it to Alpium's
+   /ogn-stations/claim every minute, and waits until an admin approves it in
+   the console; the next claim returns its credentials, which it applies
+   itself (credentials file, receiver identity, Tailscale through the root
+   helper, the fleet's field Wi-Fi).
 2. Control API on :8082, JSON only, for the Alpium SERVER only. Every request
    must carry an Ed25519 signature made with Alpium's station key, whose
    public half the station received at enrollment. The signature covers the
@@ -42,13 +49,17 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.2.0"
+AGENT_VERSION = "3.3.0"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("OGN_TEMPLATE_CONF", os.path.join(HOME, "rtlsdr-ogn", "Template.conf"))
 TEMPLATE_IN = os.path.join(REPO_DIR, "ogn", "Template.conf.in")
 CREDENTIALS_FILE = os.path.join(HOME, ".ogn_credentials.json")
+CLAIM_KEY_FILE = os.path.join(HOME, ".ogn_claim_key")
+CLAIM_URL_FILE = "/etc/alpium-ogn/enroll-base"
+DEFAULT_ENROLL_BASE = "https://app.alpium.io/api/v1"
+CLAIM_INTERVAL = 60
 AUTHORIZED_KEYS = os.path.join(HOME, ".ssh", "authorized_keys")
 HEARTBEAT_LOG_FILE = os.path.join(HOME, ".ogn_heartbeat_log.json")
 HELPER = "/usr/local/sbin/alpium-ogn-helper"
@@ -73,6 +84,7 @@ NONCE_RE = re.compile(r"^[0-9a-f]{16,64}$")
 _history_lock = threading.Lock()
 heartbeat_history = []
 heartbeat_state = {"last_ok": None, "last_error": None}
+claim_state = {"state": None, "fingerprint": None, "last_error": None, "at": None}
 
 
 # ---------------------------------------------------------------------------
@@ -412,10 +424,135 @@ def send_heartbeat(creds):
         print(f"Heartbeat refused: {r.status_code} {r.text[:200]}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# First boot: claim, then apply what Alpium hands over
+# ---------------------------------------------------------------------------
+
+CLAIM_CONTEXT = "alpium-ogn-claim-v1"
+
+
+def hardware_serial():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("Serial"):
+                    return line.split(":")[1].strip().lower()
+    except OSError:
+        pass
+    return None
+
+
+def hardware_model():
+    try:
+        with open("/proc/device-tree/model", "rb") as f:
+            return f.read().replace(b"\0", b"").decode("utf-8", "replace").strip()[:100]
+    except OSError:
+        return None
+
+
+def enroll_base():
+    try:
+        with open(CLAIM_URL_FILE) as f:
+            base = f.read().strip()
+        if base.startswith("https://"):
+            return base.rstrip("/")
+    except OSError:
+        pass
+    return DEFAULT_ENROLL_BASE
+
+
+def claim_key():
+    """This Pi's claim key, created on first use (0600, never leaves the Pi)."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    try:
+        with open(CLAIM_KEY_FILE, "rb") as f:
+            return serialization.load_ssh_private_key(f.read(), password=None)
+    except (OSError, ValueError):
+        key = Ed25519PrivateKey.generate()
+        pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                serialization.NoEncryption())
+        fd = os.open(CLAIM_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(pem)
+        return key
+
+
+def claim_once():
+    """One signed claim. Returns the enrollment payload once approved."""
+    import requests
+    from cryptography.hazmat.primitives import serialization
+    serial = hardware_serial()
+    if not serial:
+        raise RuntimeError("no Raspberry Pi serial in /proc/cpuinfo")
+    key = claim_key()
+    public = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
+    config = read_config()
+    body = json.dumps({
+        "hardware_serial": serial,
+        "hardware_model": hardware_model(),
+        "public_key": public,
+        "agent_version": AGENT_VERSION,
+        "callsign": config["call"],
+        "latitude": config["latitude"] or None,
+        "longitude": config["longitude"] or None,
+        "altitude": config["altitude"] or None,
+    }, separators=(",", ":")).encode()
+    ts = int(time.time())
+    message = "\n".join([CLAIM_CONTEXT, serial, str(ts), hashlib.sha256(body).hexdigest()]).encode()
+    headers = {"Content-Type": "application/json", "X-Alpium-Timestamp": str(ts),
+               "X-Alpium-Signature": base64.b64encode(key.sign(message)).decode()}
+    r = requests.post(f"{enroll_base()}/ogn-stations/claim", data=body, headers=headers, timeout=30)
+    claim_state["at"] = datetime.now(timezone.utc).isoformat()
+    if r.status_code != 200:
+        claim_state["last_error"] = f"{r.status_code} {r.text[:200]}"
+        return None
+    answer = r.json()
+    claim_state.update(state=answer.get("state"), fingerprint=answer.get("fingerprint"), last_error=None)
+    return answer.get("enrollment") if answer.get("state") == "enrolled" else None
+
+
+def apply_enrollment(e):
+    """Become the station Alpium approved: credentials, identity, tailnet."""
+    keep = {k: e.get(k) for k in ("device_id", "api_key", "mqtt_username", "mqtt_password", "server_url",
+                                  "heartbeat_interval", "cf_access_client_id", "cf_access_client_secret")}
+    keep["control_public_key"] = e.get("control_public_key") or e["ssh_public_key"]
+    fd = os.open(CREDENTIALS_FILE + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(keep, f, indent=2)
+    os.replace(CREDENTIALS_FILE + ".new", CREDENTIALS_FILE)
+
+    # The registry's identity: the callsign always; the position on a
+    # hardware replacement, or when this Pi has none yet.
+    station = e.get("station") or {}
+    cfg = read_config()
+    if station.get("callsign"):
+        cfg["call"] = station["callsign"]
+    if (station.get("replacement") or (not cfg["latitude"] and not cfg["longitude"])) \
+            and station.get("latitude") is not None:
+        cfg.update(latitude=station["latitude"], longitude=station["longitude"],
+                   altitude=station.get("altitude") or cfg["altitude"])
+    cfg, error = validated_config(cfg)
+    if not error:
+        write_config(cfg)
+        helper("restart-ogn")
+
+    if e.get("field_wifi"):
+        print("Field Wi-Fi:", helper("wifi-field", stdin=e["field_wifi"]).get("message"), flush=True)
+    joined = helper("join", stdin={"authkey": e["tailscale_authkey"], "hostname": e["tailscale_hostname"],
+                                   "tag": e["tailscale_tag"], "ssh_public_key": e["ssh_public_key"]})
+    print(f"Enrolled as {e['device_id']}: {joined.get('message')}", flush=True)
+    try:
+        os.unlink(CLAIM_KEY_FILE)
+    except OSError:
+        pass
+
+
 def heartbeat_loop():
-    """Forever: a station that stops beating is reported by Alpium in 30 min.
-    Every exception is caught here, so the loop itself never dies (the old
-    agent's did, and HfssHq went silent for five months)."""
+    """Forever: claim until enrolled, then heartbeat. A station that stops
+    beating is reported by Alpium in 30 min. Every exception is caught here,
+    so the loop itself never dies (the old agent's did, and HfssHq went
+    silent for five months)."""
     while True:
         interval = DEFAULT_HEARTBEAT_INTERVAL
         try:
@@ -423,11 +560,18 @@ def heartbeat_loop():
             if creds:
                 interval = int(creds.get("heartbeat_interval") or DEFAULT_HEARTBEAT_INTERVAL)
                 send_heartbeat(creds)
+            else:
+                interval = CLAIM_INTERVAL
+                enrollment = claim_once()
+                if enrollment:
+                    apply_enrollment(enrollment)
+                    interval = 5
         except Exception as e:
             heartbeat_state["last_error"] = str(e)[:300]
+            claim_state["last_error"] = str(e)[:300]
             record(0, str(e))
-            print(f"Heartbeat error: {e}", flush=True)
-        time.sleep(max(60, interval))
+            print(f"Heartbeat/claim error: {e}", flush=True)
+        time.sleep(max(5, interval))
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +582,8 @@ def heartbeat_loop():
 def h_health(_body):
     creds = load_credentials()
     return 200, {"status": "ok", "agent_version": AGENT_VERSION, "serial": get_serial(),
-                 "enrolled": bool(creds), "device_id": creds["device_id"] if creds else None}
+                 "enrolled": bool(creds), "device_id": creds["device_id"] if creds else None,
+                 "claim": None if creds else dict(claim_state)}
 
 
 def h_status(_body):
@@ -455,6 +600,7 @@ def h_status(_body):
         "interfaces": {n: interface_state(n) for n in ("eth0", "eth1", "wlan0")},
         "wifi": helper("wifi-list"),
         "update": update_info(),
+        "modem": helper("gsm-status").get("modem"),
     }
 
 
@@ -525,6 +671,17 @@ def h_wifi_delete(body):
     return (200 if r.get("success") else 400), r
 
 
+def h_wifi_field(body):
+    payload = {"remove": True} if body.get("remove") else {"ssid": body.get("ssid"), "psk": body.get("psk")}
+    r = helper("wifi-field", stdin=payload)
+    return (200 if r.get("success") else 400), r
+
+
+def h_gsm(body):
+    r = helper("gsm-set", stdin={k: body.get(k) for k in ("apn", "username", "password", "pin")})
+    return (200 if r.get("success") else 400), r
+
+
 def h_heartbeat_log(_body):
     with _history_lock:
         return 200, {"logs": list(heartbeat_history)}
@@ -552,6 +709,8 @@ ROUTES = {
     ("POST", "/v1/wifi/add"): h_wifi_add,
     ("POST", "/v1/wifi/psk"): h_wifi_psk,
     ("POST", "/v1/wifi/delete"): h_wifi_delete,
+    ("POST", "/v1/wifi/field"): h_wifi_field,
+    ("POST", "/v1/gsm"): h_gsm,
     ("GET", "/v1/heartbeat-log"): h_heartbeat_log,
     ("POST", "/v1/update"): h_update,
     ("GET", "/v1/ogn/rf"): h_ogn_page(OGN_PAGES["rf"]),

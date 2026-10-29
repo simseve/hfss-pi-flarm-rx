@@ -3,6 +3,9 @@
 
     python3 tools/make-release.py              # build + sign + gh release
     python3 tools/make-release.py --dry-run    # build + sign into dist/ only
+    python3 tools/make-release.py --sign-image v3.3.0
+                                               # after the Station image workflow
+                                               # attached the card image: sign it
 
 The version is AGENT_VERSION in ogn-station-agent.py; the tag is v<version>
 and must not exist yet. The tarball is `git archive` of HEAD (so commit
@@ -12,6 +15,12 @@ system/release-signing.pub. Stations install only what this key signed
 (root helper `update`), and Alpium only offers what verifies.
 
 Signed bytes: b"alpium-ogn-release-v1\\n" + manifest.json exactly as published.
+
+The card image (.github/workflows/station-image.yml) is built on GitHub and
+attached to the release with image-info.json; --sign-image signs a
+manifest-image.json made from that file's checksums (the image itself never
+comes back here), with the context b"alpium-ogn-image-v1\\n". Alpium offers an
+image to Raspberry Pi Imager only when that signature verifies.
 """
 import argparse
 import base64
@@ -37,12 +46,60 @@ def git(*args):
     return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
 
 
+IMAGE_CONTEXT = b"alpium-ogn-image-v1\n"
+
+
+def load_key(path):
+    raw = open(path, "rb").read()
+    try:
+        return load_ssh_private_key(raw, password=None)
+    except (TypeError, ValueError):
+        return load_ssh_private_key(raw, password=getpass.getpass("Release key passphrase: ").encode())
+
+
+def sign_image(tag, key_path):
+    """Sign the card image attached to release `tag` by the image workflow."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["gh", "release", "download", tag, "--repo", REPO, "--pattern", "image-info.json",
+                        "--dir", tmp], check=True)
+        info = json.load(open(os.path.join(tmp, "image-info.json")))
+    if f"v{info['version']}" != tag:
+        sys.exit(f"image-info.json is for {info['version']}, not {tag}")
+    manifest = json.dumps({
+        "name": f"{NAME}-image",
+        "version": info["version"],
+        "commit": info["commit"],
+        "url": f"https://github.com/{REPO}/releases/download/{tag}/{info['file']}",
+        "image_download_size": info["image_download_size"],
+        "image_download_sha256": info["image_download_sha256"],
+        "extract_size": info["extract_size"],
+        "extract_sha256": info["extract_sha256"],
+        "init_format": info["init_format"],
+        "base_image": info["base_image"],
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }, indent=2) + "\n"
+    key = load_key(key_path)
+    signature = base64.b64encode(key.sign(IMAGE_CONTEXT + manifest.encode())).decode()
+    dist = os.path.join(ROOT, "dist")
+    os.makedirs(dist, exist_ok=True)
+    open(os.path.join(dist, "manifest-image.json"), "w").write(manifest)
+    open(os.path.join(dist, "manifest-image.sig"), "w").write(signature + "\n")
+    print(manifest)
+    subprocess.run(["gh", "release", "upload", tag, "--repo", REPO, "--clobber",
+                    os.path.join(dist, "manifest-image.json"), os.path.join(dist, "manifest-image.sig")], check=True)
+    print(f"signed image of {tag}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", default=DEFAULT_KEY)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--notes", default="")
+    ap.add_argument("--sign-image", metavar="TAG", help="sign the card image attached to release TAG")
     a = ap.parse_args()
+    if a.sign_image:
+        return sign_image(a.sign_image, a.key)
 
     version = re.search(r'^AGENT_VERSION = "(\d+\.\d+\.\d+)"$',
                         open(os.path.join(ROOT, "ogn-station-agent.py")).read(), re.M).group(1)
@@ -70,11 +127,7 @@ def main():
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     }, indent=2) + "\n"
 
-    raw = open(a.key, "rb").read()
-    try:
-        key = load_ssh_private_key(raw, password=None)
-    except (TypeError, ValueError):
-        key = load_ssh_private_key(raw, password=getpass.getpass("Release key passphrase: ").encode())
+    key = load_key(a.key)
     signature = base64.b64encode(key.sign(CONTEXT + manifest.encode())).decode()
 
     pub = open(os.path.join(ROOT, "system", "release-signing.pub")).read().split()[:2]

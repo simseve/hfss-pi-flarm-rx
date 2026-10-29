@@ -78,13 +78,29 @@ is deployed:
 
 Re-running `install.sh` on an old station shreds its `.env`.
 
-## Installing a station
+## Installing a station from the image (the fast way)
+
+1. In Raspberry Pi Imager: *App options → Content repository → Use custom
+   URL* → `https://app.alpium.io/api/v1/ogn-stations/imager.json`, then choose
+   **Alpium OGN station**. In the OS customisation set an admin user with your
+   SSH public key, the Wi-Fi (the site's, or your phone hotspot), the time zone.
+2. Put the card in, connect antenna and network (Ethernet, Wi-Fi, a 4G
+   router, or a USB 4G modem whose APN you set later in Alpium), power on.
+3. In Alpium, `/admin/ogn-stations`, *Waiting for approval*: the Pi appears
+   with its serial within a couple of minutes. Check the serial against the
+   Pi, set its callsign, **Approve**. It joins within a minute.
+
+Nothing secret is on the card; an unapproved Pi gets nothing.
+
+## Installing a station with the installer
+
 
 1. Flash **Raspberry Pi OS Lite (Trixie, Debian 13)**, 32 or 64 bit
    (Bookworm is accepted too, see *Converting an old station*). In
    Raspberry Pi Imager, set a user, Wi-Fi if needed, and **your SSH public
    key** (password SSH is switched off by the installer).
-2. Get a code: Alpium, `/admin/ogn-stations`, *Enroll new stations*. One code
+2. Optional: get a code (Alpium, `/admin/ogn-stations`, *Enroll new stations*).
+   Without one, the installer ends with the station *Waiting for approval*. One code
    per station, or one code for N stations when flashing a batch on a bench
    (short validity). Codes are shown once.
 3. On the Pi:
@@ -146,6 +162,27 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   (http://wiki.glidernet.org/receiver-naming-convention).
 - **Lost or stolen**: Alpium console, Retire. Credentials revoked, tailnet
   node deleted, no more alerts.
+
+## Field Wi-Fi and 4G
+
+- **Field Wi-Fi**: set once in Alpium (*Field Wi-Fi*, typically your phone
+  hotspot; on an iPhone switch on *Maximize Compatibility*) and pushed to
+  every station at the lowest priority. In the field, switch on the hotspot
+  and a station with no other network comes online through it.
+- **4G**: a 4G router next to the Pi needs nothing. A USB modem (ModemManager
+  is installed) gets its APN and SIM PIN in Alpium, *Manage → Network*.
+
+## Building the image
+
+The `Station image` workflow builds it for every published release
+(`tools/build-image.sh`, GitHub arm64 runner) and attaches it with
+`image-info.json`. Then, on the release machine:
+
+```bash
+python3 tools/make-release.py --sign-image v3.3.0
+```
+
+Alpium offers an image to Imager only once that signature is published.
 
 ## Releasing
 

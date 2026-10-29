@@ -80,3 +80,9 @@ Rules that keep a fleet safe (do not undo them):
 - **Heartbeats go to `/ogn-stations/heartbeat`, never `/gps/`.** The body is
   Alpium's `StationHeartbeat` (app/services/ogn_station_heartbeat.py), which
   refuses unknown keys: add a field on the Alpium side first, then here.
+- **First boot claims, never a secret on the card.** Without credentials the
+  agent claims (`/ogn-stations/claim`, signed with its own key in
+  `~/.ogn_claim_key`) until an admin approves its serial; `canonical claim`
+  must match Alpium's `ogn_station_claim.canonical_claim`. `install.sh --image`
+  must stay chroot-safe (no serial, no systemd, no host keys): guard anything
+  live with `LIVE`.

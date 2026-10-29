@@ -12,8 +12,10 @@ cd /home/hfss/hfss-pi-flarm-rx
 sudo ./install.sh --code OGN-XXXX-XXXX-XXXX-XXXX --callsign MYSITE --lat 46.01 --lon 8.91 --alt 1250
 ```
 
-The code comes from an Alpium admin (`/admin/ogn-stations`, *Enroll new
-stations*). Needs Raspberry Pi OS Lite based on Debian 13 (Trixie); Debian 12
+Or flash the **Alpium OGN station** image with Raspberry Pi Imager (custom
+repository `https://app.alpium.io/api/v1/ogn-stations/imager.json`) and
+approve the Pi in Alpium at first boot. The code is optional: without one the
+station waits for approval in `/admin/ogn-stations`. Needs Raspberry Pi OS Lite based on Debian 13 (Trixie); Debian 12
 (Bookworm) is accepted so a station already in the field converts in place.
 
 Everything else, from the Tailscale policy to retiring a lost station, is in
@@ -25,7 +27,8 @@ Everything else, from the Tailscale policy to retiring a lost station, is in
 |---|---|
 | `install.sh` | install / enroll / update (idempotent) |
 | `ogn-station-agent.py` | station agent: heartbeat + signed JSON control API on :8082 (tailnet only, no pages) |
-| `tools/make-release.py` | build, sign (offline release key) and publish a release |
+| `tools/make-release.py` | build, sign (offline release key) and publish a release; `--sign-image` signs the card image |
+| `tools/build-image.sh` | the card image (Raspberry Pi OS Lite 64-bit + this repo), built by `.github/workflows/station-image.yml` |
 | `ogn/Template.conf.in` | receiver config template (OGN 0.3.3) |
 | `system/` | systemd units, root helper, sudoers rule, firewall, sshd drop-in |
 

@@ -14,7 +14,12 @@
 # in place; with --code to re-enroll (new credentials, new tailnet node).
 #
 # Options:
-#   --code CODE            enrollment code (or env OGN_ENROLL_CODE)
+#   --code CODE            enrollment code (or env OGN_ENROLL_CODE). Without
+#                          one the station CLAIMS: it appears in Alpium as
+#                          waiting for approval, identified by its serial
+#   --image                prepare a station card image (run in a chroot by
+#                          tools/build-image.sh): install everything, enroll
+#                          nothing, start nothing
 #   --callsign CALL        OGN receiver name, 3-9 letters/digits
 #   --lat/--lon/--alt N    antenna position (degrees, metres AMSL)
 #   --name NAME            station name shown in Alpium (default: callsign)
@@ -42,7 +47,7 @@ OGN_SHA_EGM=9dcaf4efd6857aaa2e1e2e2c574d3f5264eacf47024cdcd5291c40ddad5e5acc
 
 CODE=${OGN_ENROLL_CODE:-}
 CALLSIGN="" LAT="" LON="" ALT="" NAME=""
-LAN_SSH=1 HARDEN_SSH=1 SKIP_OGN=0
+LAN_SSH=1 HARDEN_SSH=1 SKIP_OGN=0 IMAGE=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo; echo "== $*"; }
@@ -59,6 +64,7 @@ while [ $# -gt 0 ]; do
     --no-lan-ssh) LAN_SSH=0; shift ;;
     --keep-ssh-passwords) HARDEN_SSH=0; shift ;;
     --skip-ogn) SKIP_OGN=1; shift ;;
+    --image) IMAGE=1; shift ;;
     -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
@@ -73,8 +79,17 @@ install -d -m 0755 /etc/alpium-ogn
 if [ "$LAN_SSH" -eq 0 ]; then touch /etc/alpium-ogn/no-lan-ssh; fi
 if [ "$HARDEN_SSH" -eq 0 ]; then touch /etc/alpium-ogn/keep-ssh-passwords; fi
 SRC=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-SERIAL=$(awk -F': ' '/^Serial/{print tolower($2)}' /proc/cpuinfo | tail -c 9 | tr -d '\n')
-[[ "$SERIAL" =~ ^[0-9a-f]{8}$ ]] || die "cannot read the Raspberry Pi serial from /proc/cpuinfo"
+# LIVE: a running station. Building an image runs in a chroot on another
+# machine: no serial, no systemd to start things with, no host keys yet.
+LIVE=1
+if [ "$IMAGE" -eq 1 ] || [ ! -d /run/systemd/system ]; then LIVE=0; fi
+if [ "$IMAGE" -eq 1 ]; then
+  [ -z "$CODE" ] || die "--image enrolls nothing; a station from the image claims at first boot"
+  SERIAL=""
+else
+  SERIAL=$(awk -F': ' '/^Serial/{print tolower($2)}' /proc/cpuinfo | tail -c 9 | tr -d '\n')
+  [[ "$SERIAL" =~ ^[0-9a-f]{8}$ ]] || die "cannot read the Raspberry Pi serial from /proc/cpuinfo"
+fi
 # shellcheck source=/dev/null
 DIST=$(. /etc/os-release && echo "${VERSION_ID:-}")
 # Trixie for new stations; Bookworm so a station already in the field can be
@@ -85,14 +100,10 @@ case "$DIST" in
 esac
 BITS=$(getconf LONG_BIT)
 CREDS=$AGENT_HOME/.ogn_credentials.json
-if [ -z "$CODE" ] && [ ! -s "$CREDS" ]; then
-  [ -t 0 ] || die "not enrolled yet: pass --code"
-  read -r -p "Enrollment code from an Alpium admin: " CODE
-fi
 if [ -n "$CALLSIGN" ] && ! [[ "$CALLSIGN" =~ ^[A-Za-z0-9]{3,9}$ ]]; then
   die "callsign must be 3-9 letters or digits"
 fi
-echo "Station serial $SERIAL, Debian $DIST, ${BITS}-bit"
+echo "Station serial ${SERIAL:-(image build)}, Debian $DIST, ${BITS}-bit"
 
 # ---------------------------------------------------------------------------
 step "1/9 Packages"
@@ -100,6 +111,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q librtlsdr0 rtl-sdr libfftw3-bin libusb-1.0-0 procserv \
   chrony curl ca-certificates git python3 python3-cryptography python3-requests \
+  modemmanager usb-modeswitch \
   nftables network-manager sudo openssh-server
 echo 'blacklist dvb_usb_rtl28xxu' > /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
 
@@ -211,7 +223,8 @@ cfg = agent.read_config()
 for key, value in zip(("call", "latitude", "longitude", "altitude"), sys.argv[3:7]):
     if value:
         cfg[key] = value
-if cfg["call"] == "NOCALL":
+if cfg["call"] == "NOCALL" and agent.get_serial() != "unknown":
+    # A placeholder until Alpium names the station (never kept by Alpium).
     cfg["call"] = "OGN" + agent.get_serial()[-6:].upper()
 cfg, error = agent.validated_config(cfg)
 if error:
@@ -235,10 +248,14 @@ step "5/9 Tailscale"
 if ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
-systemctl enable --now tailscaled
+systemctl enable tailscaled
+[ "$LIVE" -eq 0 ] || systemctl start tailscaled
+
+# Where the agent claims and enrolls (it derives the claim URL from this).
+echo "${ENROLL_URL%/ogn-stations/enroll}" > /etc/alpium-ogn/enroll-base
 
 # ---------------------------------------------------------------------------
-TS_KEY="" SSH_KEY=""
+TS_KEY="" SSH_KEY="" CLAIMING=0
 if [ -n "$CODE" ]; then
   step "6/9 Enrollment"
   CALL_NOW=$(awk -F'"' '/Call *=/{print $2; exit}' "$CONF")
@@ -321,8 +338,13 @@ PY
     --advertise-tags="$TS_TAG" --ssh=false --accept-dns=false --accept-routes=false
   unset TS_KEY
   echo "   on the tailnet as $TS_HOST ($(tailscale ip -4 | head -1))"
-else
+elif [ -s "$CREDS" ]; then
   step "6/9 Enrollment: already enrolled ($(python3 -c "import json;print(json.load(open('$CREDS'))['device_id'])")), skipped"
+else
+  step "6/9 Enrollment: by approval in Alpium"
+  # No code: the agent claims at start and an admin approves this serial in
+  # /admin/ogn-stations; nothing secret is needed on the Pi.
+  CLAIMING=1
 fi
 
 # ---------------------------------------------------------------------------
@@ -347,8 +369,10 @@ if [ "$HARDEN_SSH" -eq 1 ]; then
 else
   rm -f /etc/ssh/sshd_config.d/10-alpium-ogn.conf
 fi
-sshd -t || { rm -f /etc/ssh/sshd_config.d/10-alpium-ogn.conf; die "sshd config invalid; left unchanged"; }
-systemctl reload ssh 2>/dev/null || systemctl reload sshd
+if [ "$LIVE" -eq 1 ]; then
+  sshd -t || { rm -f /etc/ssh/sshd_config.d/10-alpium-ogn.conf; die "sshd config invalid; left unchanged"; }
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd
+fi
 
 # ---------------------------------------------------------------------------
 step "8/9 Firewall"
@@ -358,7 +382,7 @@ if [ "$LAN_SSH" -eq 1 ]; then
 else
   grep -v 'comment "lan-ssh"' "$TARGET/system/firewall.nft" > /etc/alpium-ogn/firewall.nft
 fi
-nft -c -f /etc/alpium-ogn/firewall.nft || die "firewall rules invalid"
+if [ "$LIVE" -eq 1 ]; then nft -c -f /etc/alpium-ogn/firewall.nft || die "firewall rules invalid"; fi
 install -m 0644 "$TARGET/system/alpium-ogn-firewall.service" /etc/systemd/system/alpium-ogn-firewall.service
 
 # ---------------------------------------------------------------------------
@@ -371,13 +395,19 @@ install -d -m 0755 /var/lib/alpium-ogn /opt/alpium-ogn/releases
 step "9/9 Services"
 install -m 0644 "$TARGET/system/alpium-ogn-station.service" /etc/systemd/system/alpium-ogn-station.service
 systemctl daemon-reload
-systemctl enable alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station
-systemctl restart alpium-ogn-firewall
-systemctl restart rtlsdr-ogn
-systemctl restart alpium-ogn-station
+systemctl enable alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station ModemManager
 
 AGENT_VER=$(sed -n 's/^AGENT_VERSION = "\([0-9.]*\)"$/\1/p' "$TARGET/ogn-station-agent.py")
 echo "$AGENT_VER" > /etc/alpium-ogn/version
+
+if [ "$LIVE" -eq 0 ]; then
+  echo
+  echo "Image prepared (agent $AGENT_VER). At first boot the station claims and waits for approval in Alpium."
+  exit 0
+fi
+systemctl restart alpium-ogn-firewall
+systemctl restart rtlsdr-ogn
+systemctl restart alpium-ogn-station
 
 sleep 5
 echo
@@ -390,4 +420,16 @@ else
   echo "   WARNING: station agent not answering yet; see: journalctl -u alpium-ogn-station"
 fi
 echo
-echo "Done. The station appears in Alpium (/admin/ogn-stations) within 5 minutes."
+if [ "$CLAIMING" -eq 1 ]; then
+  FP=""
+  for _ in $(seq 1 12); do
+    FP=$(curl -fsS http://127.0.0.1:8082/v1/health 2>/dev/null | python3 -c "import json,sys;c=json.load(sys.stdin).get('claim') or {};print(c.get('fingerprint') or '')" 2>/dev/null || true)
+    [ -n "$FP" ] && break
+    sleep 5
+  done
+  echo "Waiting for approval in Alpium (/admin/ogn-stations, Waiting for approval):"
+  echo "   serial $SERIAL${FP:+, key $FP}"
+  echo "Approve it there; the station joins within a minute and appears in the list."
+else
+  echo "Done. The station appears in Alpium (/admin/ogn-stations) within 5 minutes."
+fi

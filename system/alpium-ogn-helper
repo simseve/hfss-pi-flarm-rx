@@ -14,6 +14,14 @@ must not be able to turn a request into an arbitrary root command.
   wifi-add      < JSON         {"ssid", "psk", "priority"}
   wifi-set-psk  < JSON         {"name", "psk"}
   wifi-delete NAME             delete a saved Wi-Fi network
+  join          < JSON         first boot, after an admin approved the claim:
+                               {"authkey", "hostname", "tag", "ssh_public_key"}
+                               join the tailnet and authorise Alpium's SSH key
+  wifi-field    < JSON         {"ssid", "psk"} or {"remove": true}: the fleet's
+                               field Wi-Fi (a phone hotspot), lowest priority
+  gsm-set       < JSON         {"apn", "username", "password", "pin"}: the USB
+                               4G modem's connection (NetworkManager gsm)
+  gsm-status                   the modem as ModemManager sees it
   update        < JSON         {"manifest", "signature"}: verify a signed
                                release and start installing it in a job of
                                its own (unit alpium-ogn-update)
@@ -305,6 +313,157 @@ def apply_update():
     ok(f"Updated to {version}")
 
 
+# ---------------------------------------------------------------------------
+# First boot, field Wi-Fi, 4G
+# ---------------------------------------------------------------------------
+
+AGENT_HOME = "/home/hfss"
+FIELD_WIFI_ID = "alpium-field"
+FIELD_WIFI_PRIORITY = -100
+GSM_ID = "alpium-4g"
+
+
+def join_tailnet():
+    d = read_json()
+    authkey, hostname, tag, key = d.get("authkey"), d.get("hostname"), d.get("tag"), d.get("ssh_public_key")
+    if not isinstance(authkey, str) or not re.fullmatch(r"tskey-auth-[A-Za-z0-9-]{10,200}", authkey):
+        fail("Bad Tailscale key")
+    if not isinstance(hostname, str) or not re.fullmatch(r"ogn-[0-9a-f]{8}", hostname):
+        fail("Bad hostname")
+    if tag != "tag:ogn":
+        fail("Bad tag")
+    m = re.fullmatch(r"(ssh-ed25519 [A-Za-z0-9+/=]{40,100}) alpium-ogn", str(key or "").strip())
+    if not m:
+        fail("Bad SSH key")
+    # Alpium's key, usable from the tailnet only and for a shell only.
+    ssh_dir = os.path.join(AGENT_HOME, ".ssh")
+    auth = os.path.join(ssh_dir, "authorized_keys")
+    os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+    lines = []
+    if os.path.exists(auth):
+        with open(auth) as f:
+            lines = [l for l in f.read().splitlines() if not l.rstrip().endswith(" alpium-ogn")]
+    lines.append('from="100.64.0.0/10",no-agent-forwarding,no-port-forwarding,no-X11-forwarding ' + m.group(1) + " alpium-ogn")
+    with open(auth + ".new", "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(auth + ".new", 0o600)
+    shutil.chown(auth + ".new", "hfss", "hfss")
+    shutil.chown(ssh_dir, "hfss", "hfss")
+    os.replace(auth + ".new", auth)
+    run("tailscale", "logout")
+    r = subprocess.run(["tailscale", "up", "--reset", f"--auth-key={authkey}", f"--hostname={hostname}",
+                        f"--advertise-tags={tag}", "--ssh=false", "--accept-dns=false", "--accept-routes=false"],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        fail("tailscale up failed: " + (r.stderr or r.stdout).strip()[:200])
+    ok(f"On the tailnet as {hostname}")
+
+
+def delete_connection_files(conn_id):
+    """Remove every NetworkManager connection with this id (keyfiles we wrote)."""
+    for c in run("nmcli", "-t", "-f", "NAME", "connection", "show").stdout.splitlines():
+        if c.replace("\\:", ":") == conn_id:
+            run("nmcli", "connection", "delete", "id", conn_id)
+
+
+def wifi_field():
+    require_nm()
+    d = read_json()
+    delete_connection_files(FIELD_WIFI_ID)
+    if d.get("remove"):
+        run("nmcli", "connection", "reload")
+        ok("Field Wi-Fi removed")
+    ssid, psk = d.get("ssid"), d.get("psk")
+    if not valid_ssid(ssid):
+        fail("Invalid SSID")
+    if not valid_psk(psk):
+        fail("Password must be 8-63 printable characters (no backslash) or 64 hex digits")
+    conn_uuid = str(uuid.uuid4())
+    path = os.path.join(NM_DIR, f"{FIELD_WIFI_ID}.nmconnection")
+    body = (
+        "[connection]\n"
+        f"id={FIELD_WIFI_ID}\nuuid={conn_uuid}\ntype=wifi\ninterface-name=wlan0\n"
+        f"autoconnect-priority={FIELD_WIFI_PRIORITY}\n\n"
+        "[wifi]\nmode=infrastructure\n"
+        f"ssid={ssid}\n\n"
+        "[wifi-security]\nkey-mgmt=wpa-psk\n"
+        f"psk={psk}\n\n"
+        "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n"
+    )
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    if run("nmcli", "connection", "reload").returncode != 0:
+        fail("NetworkManager refused the field Wi-Fi")
+    ok(f"Field Wi-Fi {ssid} installed (used only when no other network is reachable)")
+
+
+def printable(value, limit=64):
+    return value is None or (isinstance(value, str) and len(value) <= limit
+                             and re.fullmatch(r"[\x21-\x7e]*", value) is not None and "\\" not in value)
+
+
+def gsm_set():
+    require_nm()
+    d = read_json()
+    apn, user, password, pin = d.get("apn"), d.get("username"), d.get("password"), d.get("pin")
+    if not isinstance(apn, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", apn):
+        fail("Invalid APN")
+    if not printable(user) or not printable(password):
+        fail("Username and password: printable characters, no spaces or backslash")
+    if pin is not None and not re.fullmatch(r"[0-9]{4,8}", str(pin)):
+        fail("PIN must be 4-8 digits")
+    delete_connection_files(GSM_ID)
+    gsm = f"apn={apn}\n"
+    if user:
+        gsm += f"username={user}\n"
+    if password:
+        gsm += f"password={password}\n"
+    if pin:
+        gsm += f"pin={pin}\n"
+    body = (
+        "[connection]\n"
+        f"id={GSM_ID}\nuuid={uuid.uuid4()}\ntype=gsm\nautoconnect=true\n\n"
+        f"[gsm]\n{gsm}\n"
+        "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n"
+    )
+    path = os.path.join(NM_DIR, f"{GSM_ID}.nmconnection")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    if run("nmcli", "connection", "reload").returncode != 0:
+        fail("NetworkManager refused the 4G connection")
+    run("nmcli", "connection", "up", "id", GSM_ID)
+    ok(f"4G connection set (APN {apn})")
+
+
+def gsm_status():
+    if not shutil.which("mmcli"):
+        ok("no ModemManager", modem=None)
+    try:
+        listing = json.loads(run("mmcli", "-L", "-J").stdout or "{}")
+    except ValueError:
+        ok("no modem", modem=None)
+    paths = listing.get("modem-list") or []
+    if not paths:
+        ok("no modem", modem=None)
+    try:
+        m = json.loads(run("mmcli", "-m", paths[0].rsplit("/", 1)[-1], "-J").stdout or "{}").get("modem", {})
+    except ValueError:
+        ok("modem unreadable", modem=None)
+    generic, gpp = m.get("generic", {}), m.get("3gpp", {})
+    ok("ok", modem={
+        "model": " ".join(x for x in (generic.get("manufacturer"), generic.get("model")) if x)[:80],
+        "state": generic.get("state"),
+        "failed_reason": generic.get("state-failed-reason"),
+        "signal_percent": (generic.get("signal-quality") or {}).get("value"),
+        "access": ",".join(generic.get("access-technologies") or []),
+        "operator": gpp.get("operator-name"),
+        "registration": gpp.get("registration-state"),
+        "sim": generic.get("sim"),
+    })
+
+
 def main(argv):
     if not argv:
         fail("No command")
@@ -374,6 +533,18 @@ def main(argv):
         if run("nmcli", "connection", "delete", "id", args[0]).returncode != 0:
             fail("Could not delete the network")
         ok("Network deleted")
+
+    if cmd == "join" and not args:
+        join_tailnet()
+
+    if cmd == "wifi-field" and not args:
+        wifi_field()
+
+    if cmd == "gsm-set" and not args:
+        gsm_set()
+
+    if cmd == "gsm-status" and not args:
+        gsm_status()
 
     if cmd == "update" and not args:
         start_update()

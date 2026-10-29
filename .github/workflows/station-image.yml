@@ -1,0 +1,35 @@
+# Builds the station card image for a published release and attaches it
+# (plus image-info.json) to that release. The image is then SIGNED offline on
+# the release machine with `tools/make-release.py --sign-image vX.Y.Z`, and
+# only a signed image is offered by Alpium to Raspberry Pi Imager.
+name: Station image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build the image for (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - name: Tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q jq xz-utils parted e2fsprogs
+      - name: Build
+        run: sudo tools/build-image.sh dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" dist/*.img.xz dist/image-info.json --clobber
