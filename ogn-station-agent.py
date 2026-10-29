@@ -49,7 +49,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.3.1"
+AGENT_VERSION = "3.3.2"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -548,6 +548,24 @@ def apply_enrollment(e):
         pass
 
 
+_gsm_auto = {"next": 0.0, "message": None}
+
+
+def maybe_gsm_auto():
+    """A USB 4G modem with no connection yet is set up by itself: the APN
+    from the SIM's operator (helper `gsm-auto`). Every minute until done (a
+    modem appears late after boot), then every 10 minutes (a new SIM)."""
+    now = time.time()
+    if now < _gsm_auto["next"]:
+        return
+    r = helper("gsm-auto")
+    configured = bool(r.get("configured"))
+    _gsm_auto["next"] = now + (600 if configured or r.get("message") == "no modem" else 60)
+    if r.get("message") != _gsm_auto["message"]:
+        _gsm_auto["message"] = r.get("message")
+        print(f"4G: {r.get('message')}", flush=True)
+
+
 def heartbeat_loop():
     """Forever: claim until enrolled, then heartbeat. A station that stops
     beating is reported by Alpium in 30 min. Every exception is caught here,
@@ -555,6 +573,10 @@ def heartbeat_loop():
     silent for five months)."""
     while True:
         interval = DEFAULT_HEARTBEAT_INTERVAL
+        try:
+            maybe_gsm_auto()
+        except Exception as e:
+            print(f"4G auto setup error: {e}", flush=True)
         try:
             creds = load_credentials()
             if creds:

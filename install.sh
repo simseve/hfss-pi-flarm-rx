@@ -111,7 +111,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q librtlsdr0 rtl-sdr libfftw3-bin libusb-1.0-0 procserv \
   chrony curl ca-certificates git python3 python3-cryptography python3-requests \
-  modemmanager usb-modeswitch \
+  modemmanager usb-modeswitch mobile-broadband-provider-info \
   nftables network-manager sudo openssh-server
 echo 'blacklist dvb_usb_rtl28xxu' > /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
 

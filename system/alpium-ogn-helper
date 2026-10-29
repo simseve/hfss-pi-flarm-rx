@@ -22,6 +22,9 @@ must not be able to turn a request into an arbitrary root command.
   gsm-set       < JSON         {"apn", "username", "password", "pin"}: the USB
                                4G modem's connection (NetworkManager gsm)
   gsm-status                   the modem as ModemManager sees it
+  gsm-auto                     a modem with no 4G connection yet: look the
+                               APN up by the SIM's operator (mobile-broadband-
+                               provider-info) and create the connection
   update        < JSON         {"manifest", "signature"}: verify a signed
                                release and start installing it in a job of
                                its own (unit alpium-ogn-update)
@@ -406,7 +409,12 @@ def printable(value, limit=64):
 def gsm_set():
     require_nm()
     d = read_json()
-    apn, user, password, pin = d.get("apn"), d.get("username"), d.get("password"), d.get("pin")
+    write_gsm(d.get("apn"), d.get("username"), d.get("password"), d.get("pin"))
+    ok(f"4G connection set (APN {d.get('apn')})")
+
+
+def write_gsm(apn, user, password, pin):
+    """Validate and write the alpium-4g NetworkManager keyfile, bring it up."""
     if not isinstance(apn, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", apn):
         fail("Invalid APN")
     if not printable(user) or not printable(password):
@@ -434,7 +442,92 @@ def gsm_set():
     if run("nmcli", "connection", "reload").returncode != 0:
         fail("NetworkManager refused the 4G connection")
     run("nmcli", "connection", "up", "id", GSM_ID)
-    ok(f"4G connection set (APN {apn})")
+
+
+PROVIDERS_XML = "/usr/share/mobile-broadband-provider-info/serviceproviders.xml"
+
+
+def first_modem():
+    """ModemManager's first modem as a dict, or None."""
+    if not shutil.which("mmcli"):
+        return None
+    try:
+        paths = json.loads(run("mmcli", "-L", "-J").stdout or "{}").get("modem-list") or []
+        if not paths:
+            return None
+        return json.loads(run("mmcli", "-m", paths[0].rsplit("/", 1)[-1], "-J").stdout or "{}").get("modem") or None
+    except ValueError:
+        return None
+
+
+def sim_operator_code(modem):
+    """MCC+MNC of the SIM (not of the network: roaming must not pick the
+    visited network's APN), or None when the SIM cannot be read (PIN)."""
+    sim = (modem.get("generic") or {}).get("sim")
+    if not sim or sim == "--":
+        return None
+    try:
+        props = json.loads(run("mmcli", "-i", sim.rsplit("/", 1)[-1], "-J").stdout or "{}") \
+            .get("sim", {}).get("properties", {})
+    except ValueError:
+        return None
+    code = str(props.get("operator-code") or "")
+    if not code and props.get("imsi"):
+        code = str(props["imsi"])[:6]
+    return code if re.fullmatch(r"[0-9]{5,6}", code) else None
+
+
+def lookup_apn(operator_code, xml_path=PROVIDERS_XML):
+    """(apn, username, password) for this MCC+MNC from the operator database.
+
+    The first APN marked for internet use, else the first APN. MNCs are
+    compared as numbers ("01" == "1"); a 6-digit code is tried as 3+3 before
+    3+2.
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(xml_path).getroot()
+    except (OSError, ET.ParseError):
+        return None
+    mcc = operator_code[:3]
+    mncs = [operator_code[3:]] if len(operator_code) == 5 else [operator_code[3:], operator_code[3:5]]
+    for mnc in mncs:
+        for provider in root.iter("provider"):
+            ids = provider.findall("./gsm/network-id")
+            if not any(i.get("mcc") == mcc and int(i.get("mnc", "-1")) == int(mnc) for i in ids):
+                continue
+            apns = provider.findall("./gsm/apn")
+            internet = [a for a in apns if any(u.get("type") == "internet" for u in a.findall("usage"))]
+            for a in internet + apns:
+                value = a.get("value")
+                if value and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value):
+                    return value, (a.findtext("username") or None), (a.findtext("password") or None)
+    return None
+
+
+def gsm_auto():
+    """Set up a new modem by itself, so a station on 4G alone gets online."""
+    require_nm()
+    names = [c.replace("\\:", ":") for c in run("nmcli", "-t", "-f", "NAME", "connection", "show").stdout.splitlines()]
+    if GSM_ID in names:
+        ok("4G already configured", configured=True)
+    modem = first_modem()
+    if not modem:
+        ok("no modem", configured=False)
+    state = (modem.get("generic") or {}).get("state")
+    if state == "locked":
+        ok("SIM locked: set its PIN in Alpium (Manage, Network, 4G)", configured=False)
+    code = sim_operator_code(modem)
+    if not code:
+        ok("SIM operator unknown yet", configured=False)
+    found = lookup_apn(code)
+    if not found:
+        ok(f"no APN known for operator {code}: set it in Alpium", configured=False)
+    apn, user, password = found
+    if not printable(user) or not printable(password):
+        user, password = None, None
+    write_gsm(apn, user, password, None)
+    ok(f"4G set up for operator {code} (APN {apn})", configured=True, apn=apn)
 
 
 def gsm_status():
@@ -545,6 +638,9 @@ def main(argv):
 
     if cmd == "gsm-status" and not args:
         gsm_status()
+
+    if cmd == "gsm-auto" and not args:
+        gsm_auto()
 
     if cmd == "update" and not args:
         start_update()

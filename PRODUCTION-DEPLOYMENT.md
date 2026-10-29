@@ -170,8 +170,16 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   hotspot; on an iPhone switch on *Maximize Compatibility*) and pushed to
   every station at the lowest priority. In the field, switch on the hotspot
   and a station with no other network comes online through it.
-- **4G**: a 4G router next to the Pi needs nothing. A USB modem (ModemManager
-  is installed) gets its APN and SIM PIN in Alpium, *Manage → Network*.
+- **4G**: a 4G router next to the Pi needs nothing. A **HiLink / router-style
+  dongle** (it shows up as a network card, e.g. Huawei E3372h-320 HiLink)
+  works out of the box and is preferred over Wi-Fi, like a cable. A
+  **modem-style dongle** (Quectel EC25, SIMCom SIM7600, Huawei "stick"
+  firmware) is set up by the agent itself: it reads the SIM's operator and
+  takes the APN from the operator database (mobile-broadband-provider-info),
+  so a station with only 4G comes online alone; Wi-Fi stays preferred and 4G
+  carries the traffic when Wi-Fi drops. A SIM with a PIN, or an operator the
+  database does not know: set PIN/APN in Alpium, *Manage → Network*, over
+  another network (your field hotspot) once.
 
 ## Building the image
 
