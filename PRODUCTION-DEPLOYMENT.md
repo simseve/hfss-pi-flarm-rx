@@ -23,7 +23,9 @@ server side is documented in the Alpium repo, `docs/OGN_STATIONS.md`.
   and the agent relays the status pages to Alpium. SSH is key-only. Who on the
   tailnet may connect is decided by Tailscale ACLs.
 - **Survives reboots.** Everything is a systemd service.
-- **Alpium notices.** The agent sends a heartbeat every 5 minutes. A station
+- **Alpium notices.** The agent sends a heartbeat every 5 minutes to
+  `/api/v1/ogn-stations/heartbeat` (typed fields only; `/gps/` refuses
+  stations). A station
   silent for 30 minutes raises a Sentry issue that says whether the Pi is
   still on the tailnet (agent dead: SSH in) or not (power or network: send
   someone).

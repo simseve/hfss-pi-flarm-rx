@@ -77,3 +77,6 @@ Rules that keep a fleet safe (do not undo them):
   model, and writes back the callsign it is given). Never derive a callsign
   on the station or change it locally; Alpium changes it through the signed
   config call.
+- **Heartbeats go to `/ogn-stations/heartbeat`, never `/gps/`.** The body is
+  Alpium's `StationHeartbeat` (app/services/ogn_station_heartbeat.py), which
+  refuses unknown keys: add a field on the Alpium side first, then here.

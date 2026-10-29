@@ -5,9 +5,11 @@ Runs on every Raspberry Pi receiver as the systemd service
 `alpium-ogn-station` (user hfss). It serves NO web pages: Alpium is the
 station's interface (its admin console, /admin/ogn-stations). Two jobs:
 
-1. Heartbeat: every few minutes, POST the station's health to Alpium with the
-   station's OWN api key (written by install.sh at enrollment). Alpium's
-   console and its silence alert are built on this.
+1. Heartbeat: every few minutes, POST the station's health to Alpium's
+   /ogn-stations/heartbeat with the station's OWN api key (written by
+   install.sh at enrollment). A fixed set of typed fields: Alpium refuses
+   unknown ones. Never /gps/, which is for positions and refuses stations.
+   Alpium's console and its silence alert are built on this.
 2. Control API on :8082, JSON only, for the Alpium SERVER only. Every request
    must carry an Ed25519 signature made with Alpium's station key, whose
    public half the station received at enrollment. The signature covers the
@@ -40,7 +42,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.1.0"
+AGENT_VERSION = "3.2.0"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -361,48 +363,50 @@ def record(status_code, text):
             pass
 
 
-def send_heartbeat(creds):
-    import requests
+def heartbeat_body():
+    """What a heartbeat says: the fields Alpium's StationHeartbeat accepts."""
     config = read_config()
     status = station_status()
-    payload = {
-        "device_id": creds["device_id"],
+    body = {
+        "agent_version": AGENT_VERSION,
+        "station_time": status["timestamp"],
+        "callsign": config["call"] if CALLSIGN_RE.match(str(config["call"])) else None,
+        "vpn_ip": status["vpn_ip"],
         "latitude": config["latitude"],
         "longitude": config["longitude"],
         "altitude": config["altitude"],
-        "speed": 0,
-        "heading": 0,
-        "timestamp": status["timestamp"],
-        # Required by POST /gps/; the nil UUID marks a heartbeat, not a flight.
-        "flight_id": "00000000-0000-0000-0000-000000000000",
-        "device_metadata": {
-            "heartbeat": True,
-            "agent_version": AGENT_VERSION,
-            "station_status": status["ogn_status"],
-            "station_lat": config["latitude"],
-            "station_lon": config["longitude"],
-            "station_altitude": config["altitude"],
-            "callsign": config["call"],
-            # Alpium pins this only after the tailnet confirms it is ours.
-            "vpn_ip": status["vpn_ip"],
-            "cpu_temp": status["cpu_temp"],
-            "uptime": status["uptime"],
-            "disk_usage_percent": status["disk_usage_percent"],
-            "memory_usage_percent": status["memory_usage_percent"],
-            "ogn_rf_running": status["ogn_rf_running"],
-            "ogn_decode_running": status["ogn_decode_running"],
-            "timestamp": status["timestamp"],
-        },
+        "ogn_rf_running": status["ogn_rf_running"],
+        "ogn_decode_running": status["ogn_decode_running"],
+        "cpu_temp": status["cpu_temp"],
+        "disk_usage_percent": status["disk_usage_percent"],
+        "memory_usage_percent": status["memory_usage_percent"],
+        "uptime_seconds": status["uptime"],
     }
+    update = (update_info().get("state") or {})
+    if update.get("state") in ("queued", "running", "done", "failed"):
+        body["update"] = {"state": update["state"], "version": update.get("version"),
+                          "error": (update.get("error") or None) and str(update["error"])[:300]}
+    return body
+
+
+def send_heartbeat(creds):
+    import requests
     headers = {"Authorization": f"Bearer {creds['api_key']}"}
     if creds.get("cf_access_client_id") and creds.get("cf_access_client_secret"):
         headers["CF-Access-Client-Id"] = creds["cf_access_client_id"]
         headers["CF-Access-Client-Secret"] = creds["cf_access_client_secret"]
-    r = requests.post(f"{creds['server_url'].rstrip('/')}/gps/", headers=headers, json=payload, timeout=15)
+    url = f"{creds['server_url'].rstrip('/')}/ogn-stations/heartbeat"
+    r = requests.post(url, headers=headers, json=heartbeat_body(), timeout=15)
     record(r.status_code, r.text)
     if r.status_code == 200:
-        heartbeat_state["last_ok"] = status["timestamp"]
+        heartbeat_state["last_ok"] = datetime.now(timezone.utc).isoformat()
         heartbeat_state["last_error"] = None
+        try:
+            answer = r.json()
+            heartbeat_state["registry_callsign"] = answer.get("callsign")
+            heartbeat_state["server_time"] = answer.get("server_time")
+        except ValueError:
+            pass
     else:
         heartbeat_state["last_error"] = f"{r.status_code} {r.text[:200]}"
         print(f"Heartbeat refused: {r.status_code} {r.text[:200]}", flush=True)
