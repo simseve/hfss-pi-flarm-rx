@@ -1,0 +1,19 @@
+[Unit]
+Description=Alpium OGN station: the green light shows whether it works
+After=alpium-ogn-station.service
+
+[Service]
+# Root only because the LED lives in /sys; it reads one word the agent writes
+# to /run/alpium-ogn/led and touches nothing else.
+ExecStart=/usr/local/sbin/alpium-ogn-led
+Restart=always
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ReadOnlyPaths=/run/alpium-ogn
+
+[Install]
+WantedBy=multi-user.target

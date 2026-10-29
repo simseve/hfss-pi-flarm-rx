@@ -49,7 +49,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.3.4"
+AGENT_VERSION = "3.3.5"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,6 +73,20 @@ MAX_BODY = 16 * 1024
 OGN_PAGES = {"rf": 8080, "decode": 8081}
 OGN_PAGE_MAX = 512 * 1024
 
+# The SDR stick: RTL2832U sticks (RTL-SDR Blog, Nooelec, generic) show up on
+# the USB bus as Realtek 0bda:2838 or 0bda:2832.
+USB_DEVICES = "/sys/bus/usb/devices"
+SDR_IDS = {("0bda", "2838"), ("0bda", "2832")}
+# The station's state for the green light, read by alpium-ogn-led (root):
+# ok, connecting or fault. /run/alpium-ogn is the agent unit's RuntimeDirectory.
+LED_STATE_FILE = os.environ.get("ALPIUM_OGN_LED_STATE", "/run/alpium-ogn/led")
+LED_INTERVAL = 15
+# A heartbeat accepted within this long means the station is online.
+ONLINE_WITHIN = 2 * DEFAULT_HEARTBEAT_INTERVAL + 60
+# Heartbeat keys added in 3.3.5; a server that predates them refuses them
+# (extra=forbid), so they are dropped rather than lose the heartbeat.
+SDR_KEYS = ("sdr_present", "sdr_model", "rf_noise_db", "aircraft_last_hour")
+
 SIGNATURE_CONTEXT = "alpium-ogn-control-v1"
 CLOCK_WINDOW = 60          # seconds either side
 NONCE_TTL = 2 * CLOCK_WINDOW + 10
@@ -81,6 +95,7 @@ TAILNET = ipaddress.ip_network("100.64.0.0/10")
 CALLSIGN_RE = re.compile(r"^[A-Za-z0-9]{3,9}$")
 NONCE_RE = re.compile(r"^[0-9a-f]{16,64}$")
 
+_send_sdr_keys = True
 _history_lock = threading.Lock()
 heartbeat_history = []
 heartbeat_state = {"last_ok": None, "last_error": None}
@@ -375,6 +390,98 @@ def record(status_code, text):
             pass
 
 
+def sdr_info(usb_root=USB_DEVICES):
+    """(present, model) of the RTL-SDR stick on the USB bus."""
+    try:
+        names = os.listdir(usb_root)
+    except OSError:
+        return False, None
+    for name in names:
+        base = os.path.join(usb_root, name)
+        try:
+            with open(os.path.join(base, "idVendor")) as f:
+                vendor = f.read().strip().lower()
+            with open(os.path.join(base, "idProduct")) as f:
+                product = f.read().strip().lower()
+        except OSError:
+            continue
+        if (vendor, product) in SDR_IDS:
+            try:
+                with open(os.path.join(base, "product")) as f:
+                    model = f.read().strip()[:60] or None
+            except OSError:
+                model = None
+            return True, model
+    return False, None
+
+
+_NOISE_RE = re.compile(r"RF input noise\s+([+-]?(?:\d+(?:\.\d+)?|inf))\s*dB", re.IGNORECASE)
+_HOUR_RE = re.compile(r"Aircrafts received over last hour\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE)
+
+
+def decode_readings(html):
+    """(rf_noise_db, aircraft_last_hour) from ogn-decode's status page.
+    The noise is None when the decoder reads no samples ("-inf")."""
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    noise = None
+    m = _NOISE_RE.search(text)
+    if m and "inf" not in m.group(1).lower():
+        noise = float(m.group(1))
+    m = _HOUR_RE.search(text)
+    return noise, (int(m.group(2)) if m else None)
+
+
+def receiver_readings():
+    """What the receiver hears now, read from its local status page."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{OGN_PAGES['decode']}/", timeout=3) as r:
+            return decode_readings(r.read(OGN_PAGE_MAX).decode("utf-8", "replace"))
+    except Exception:
+        return None, None
+
+
+def led_state(enrolled, last_ok_iso, sdr_present, rf_noise_db, rf_running, now=None):
+    """The green light: `ok` (steady: online and receiving), `connecting`
+    (slow blink: not enrolled yet or no accepted heartbeat lately) or
+    `fault` (fast blink: online but no stick, or the receiver reads nothing).
+    Kept in step with app/services/ogn_station_heartbeat.receiver_health."""
+    now = time.time() if now is None else now
+    online = False
+    if enrolled and last_ok_iso:
+        try:
+            online = now - datetime.fromisoformat(last_ok_iso).timestamp() <= ONLINE_WITHIN
+        except ValueError:
+            online = False
+    if not online:
+        return "connecting"
+    if not sdr_present or not rf_running or rf_noise_db is None:
+        return "fault"
+    return "ok"
+
+
+def write_led_state(state, path=LED_STATE_FILE):
+    try:
+        with open(path + ".new", "w") as f:
+            f.write(state + "\n")
+        os.replace(path + ".new", path)
+    except OSError:
+        pass  # no LED service on this Pi (an older install): nothing to show
+
+
+def led_loop():
+    """Every LED_INTERVAL s: the station's state for the green light."""
+    while True:
+        try:
+            present, _ = sdr_info()
+            noise, _ = receiver_readings()
+            status = station_status()
+            write_led_state(led_state(bool(load_credentials()), heartbeat_state.get("last_ok"),
+                                      present, noise, status["ogn_rf_running"]))
+        except Exception as e:
+            print(f"LED state error: {e}", flush=True)
+        time.sleep(LED_INTERVAL)
+
+
 def heartbeat_body():
     """What a heartbeat says: the fields Alpium's StationHeartbeat accepts."""
     config = read_config()
@@ -394,6 +501,9 @@ def heartbeat_body():
         "memory_usage_percent": status["memory_usage_percent"],
         "uptime_seconds": status["uptime"],
     }
+    present, model = sdr_info()
+    noise, last_hour = receiver_readings()
+    body.update(sdr_present=present, sdr_model=model, rf_noise_db=noise, aircraft_last_hour=last_hour)
     update = (update_info().get("state") or {})
     if update.get("state") in ("queued", "running", "done", "failed"):
         body["update"] = {"state": update["state"], "version": update.get("version"),
@@ -407,8 +517,17 @@ def send_heartbeat(creds):
     if creds.get("cf_access_client_id") and creds.get("cf_access_client_secret"):
         headers["CF-Access-Client-Id"] = creds["cf_access_client_id"]
         headers["CF-Access-Client-Secret"] = creds["cf_access_client_secret"]
+    global _send_sdr_keys
     url = f"{creds['server_url'].rstrip('/')}/ogn-stations/heartbeat"
-    r = requests.post(url, headers=headers, json=heartbeat_body(), timeout=15)
+    body = heartbeat_body()
+    if not _send_sdr_keys:
+        body = {k: v for k, v in body.items() if k not in SDR_KEYS}
+    r = requests.post(url, headers=headers, json=body, timeout=15)
+    if r.status_code == 422 and _send_sdr_keys and "extra" in r.text:
+        # A server before migration 247: send what it knows, keep beating.
+        _send_sdr_keys = False
+        body = {k: v for k, v in body.items() if k not in SDR_KEYS}
+        r = requests.post(url, headers=headers, json=body, timeout=15)
     record(r.status_code, r.text)
     if r.status_code == 200:
         heartbeat_state["last_ok"] = datetime.now(timezone.utc).isoformat()
@@ -879,6 +998,7 @@ class Server(ThreadingHTTPServer):
 def main():
     load_history()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
+    threading.Thread(target=led_loop, daemon=True).start()
     Server(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()
 
 

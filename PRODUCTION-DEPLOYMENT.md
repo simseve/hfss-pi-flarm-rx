@@ -275,6 +275,22 @@ Leaked: rotate while you still control the old key: a release signed with the
 OLD key whose `system/release-signing.pub` is the NEW one, rolled out to the
 fleet; then switch Alpium's `RELEASE_PUBLIC_KEY`.
 
+## The green light (for the person on site)
+
+Since 3.3.5 the Pi's green ACT LED says whether the station works, so nobody
+on site needs a phone or a login:
+
+| Light | Meaning | What to do |
+|---|---|---|
+| Steady | Online and receiving | Done |
+| Slow blink | Connecting: no internet yet, or not approved yet | Wait 10 min, then check router / cable / SIM |
+| Fast blink | Online, but no SDR stick or the receiver reads nothing | Push the stick in, check the antenna cable |
+
+The same state is the SDR chip in Alpium (*✓ SDR / ✗ No SDR / ✗ SDR no
+signal*), from the heartbeat's `sdr_present` and `rf_noise_db`. The paper
+that goes in the box (Alpium, *Station requests*, *Print box sheets*) explains
+the light in the club's language.
+
 ## What runs on a station
 
 | Unit | What | User |
@@ -284,6 +300,7 @@ fleet; then switch Alpium's `RELEASE_PUBLIC_KEY`.
 | `alpium-ogn-firewall` | nftables table `inet alpium_ogn` | root, oneshot |
 | `tailscaled` | tailnet node `ogn-<serial>`, tag:ogn | root |
 | `alpium-ogn-update` | transient: installs a signed release, then exits | root |
+| `alpium-ogn-led` | the green light (3.3.5): shows the state the agent writes to `/run/alpium-ogn/led` | root, no network |
 
 The agent is `ogn-station-agent.py`: Python standard library plus
 `cryptography`, no web framework, bodies capped at 16 KB. Its only root access is `/usr/local/sbin/alpium-ogn-helper` (restart

@@ -397,8 +397,11 @@ install -d -m 0755 /var/lib/alpium-ogn /opt/alpium-ogn/releases
 # ---------------------------------------------------------------------------
 step "9/9 Services"
 install -m 0644 "$TARGET/system/alpium-ogn-station.service" /etc/systemd/system/alpium-ogn-station.service
+# The green light for the person on site (agent 3.3.5).
+install -o root -g root -m 0755 "$TARGET/system/alpium-ogn-led" /usr/local/sbin/alpium-ogn-led
+install -m 0644 "$TARGET/system/alpium-ogn-led.service" /etc/systemd/system/alpium-ogn-led.service
 systemctl daemon-reload
-systemctl enable alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station ModemManager
+systemctl enable alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station alpium-ogn-led ModemManager
 
 AGENT_VER=$(sed -n 's/^AGENT_VERSION = "\([0-9.]*\)"$/\1/p' "$TARGET/ogn-station-agent.py")
 echo "$AGENT_VER" > /etc/alpium-ogn/version
@@ -411,10 +414,11 @@ fi
 systemctl restart alpium-ogn-firewall
 systemctl restart rtlsdr-ogn
 systemctl restart alpium-ogn-station
+systemctl restart alpium-ogn-led
 
 sleep 5
 echo
-for s in alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station tailscaled; do
+for s in alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station alpium-ogn-led tailscaled; do
   printf '   %-22s %s\n' "$s" "$(systemctl is-active "$s" || true)"
 done
 if curl -fsS http://127.0.0.1:8082/v1/health >/dev/null; then

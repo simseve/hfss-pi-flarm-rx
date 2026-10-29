@@ -12,6 +12,9 @@ After=network-online.target tailscaled.service
 User=hfss
 Group=hfss
 WorkingDirectory=/home/hfss/hfss-pi-flarm-rx
+# /run/alpium-ogn: the green light's state (alpium-ogn-led reads it).
+RuntimeDirectory=alpium-ogn
+RuntimeDirectoryMode=0755
 EnvironmentFile=-/etc/default/alpium-ogn-station
 ExecStart=/usr/bin/python3 -I -u /home/hfss/hfss-pi-flarm-rx/ogn-station-agent.py
 Restart=always
