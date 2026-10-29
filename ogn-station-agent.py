@@ -49,7 +49,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.3.3"
+AGENT_VERSION = "3.3.4"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -566,6 +566,28 @@ def maybe_gsm_auto():
         print(f"4G: {r.get('message')}", flush=True)
 
 
+_hostname = {"done": False, "next": 0.0}
+
+
+def maybe_set_hostname(creds):
+    """Once enrolled, the Pi takes its station's name, ogn-<serial>, the one
+    Alpium gives it on the tailnet: every card of a batch is written with the
+    same Imager settings, so the name Imager gave says nothing. Once per
+    start; retried every 10 minutes if the helper refuses."""
+    now = time.time()
+    if _hostname["done"] or now < _hostname["next"]:
+        return
+    m = re.fullmatch(r"OGN_STATION_([0-9a-f]{8})", str(creds.get("device_id") or ""))
+    if not m:
+        _hostname["done"] = True
+        return
+    r = helper("set-hostname", f"ogn-{m.group(1)}")
+    _hostname["done"] = bool(r.get("success"))
+    _hostname["next"] = now + 600
+    if not _hostname["done"] or r.get("changed"):
+        print(f"Hostname: {r.get('message')}", flush=True)
+
+
 def heartbeat_loop():
     """Forever: claim until enrolled, then heartbeat. A station that stops
     beating is reported by Alpium in 30 min. Every exception is caught here,
@@ -581,6 +603,10 @@ def heartbeat_loop():
             creds = load_credentials()
             if creds:
                 interval = int(creds.get("heartbeat_interval") or DEFAULT_HEARTBEAT_INTERVAL)
+                try:
+                    maybe_set_hostname(creds)
+                except Exception as e:
+                    print(f"Hostname error: {e}", flush=True)
                 send_heartbeat(creds)
             else:
                 interval = CLAIM_INTERVAL

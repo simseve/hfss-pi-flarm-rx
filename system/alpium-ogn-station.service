@@ -22,8 +22,10 @@ PrivateTmp=yes
 ProtectSystem=full
 # ProtectSystem makes /etc read-only for the agent AND for the root helper it
 # runs through sudo (same mount namespace). The helper writes NetworkManager
-# keyfiles (Wi-Fi, field Wi-Fi, 4G): that one directory, nothing else.
-ReadWritePaths=/etc/NetworkManager/system-connections
+# keyfiles (Wi-Fi, field Wi-Fi, 4G), and names the Pi after its station
+# (/etc/hosts, cloud-init's preserve_hostname; /etc/hostname is written by
+# systemd-hostnamed, outside this sandbox): those paths, nothing else.
+ReadWritePaths=/etc/NetworkManager/system-connections /etc/hosts -/etc/cloud/cloud.cfg.d
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

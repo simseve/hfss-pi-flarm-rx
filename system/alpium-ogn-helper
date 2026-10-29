@@ -14,6 +14,8 @@ must not be able to turn a request into an arbitrary root command.
   wifi-add      < JSON         {"ssid", "psk", "priority"}
   wifi-set-psk  < JSON         {"name", "psk"}
   wifi-delete NAME             delete a saved Wi-Fi network
+  set-hostname NAME            the station's own name, ogn-<8 hex>: the same
+                               as on the tailnet, whatever Imager wrote
   join          < JSON         first boot, after an admin approved the claim:
                                {"authkey", "hostname", "tag", "ssh_public_key"}
                                join the tailnet and authorise Alpium's SSH key
@@ -362,6 +364,43 @@ def join_tailnet():
     ok(f"On the tailnet as {hostname}")
 
 
+HOSTNAME_RE = r"ogn-[0-9a-f]{8}"
+HOSTS_FILE = "/etc/hosts"
+# cloud-init's update_hostname runs at every boot and would put back the name
+# Imager wrote in user-data; this keeps the one set here.
+CLOUD_HOSTNAME_CFG = "/etc/cloud/cloud.cfg.d/99-alpium-hostname.cfg"
+
+
+def set_hostname(name):
+    """Name the Pi like its station (ogn-<serial>), once it is enrolled.
+
+    Every card of a batch is written with the same Imager settings, so the
+    name Imager gave is not the station's; the agent calls this with the name
+    Alpium uses on the tailnet. Idempotent.
+    """
+    if not isinstance(name, str) or not re.fullmatch(HOSTNAME_RE, name):
+        fail("Bad hostname")
+    current = run("hostname").stdout.strip()
+    if os.path.isdir(os.path.dirname(CLOUD_HOSTNAME_CFG)):
+        with open(CLOUD_HOSTNAME_CFG, "w") as f:
+            f.write("# Written by alpium-ogn-helper: the station names itself.\npreserve_hostname: true\n")
+    if current != name:
+        # systemd-hostnamed writes /etc/hostname; it is outside this sandbox.
+        if run("hostnamectl", "set-hostname", name).returncode != 0:
+            fail("Could not set the hostname")
+    # 127.0.1.1 names the Pi itself; without it sudo stalls resolving the name.
+    # Rewritten in place: /etc/hosts is a single writable file in the sandbox.
+    with open(HOSTS_FILE, "r+") as f:
+        lines = f.read().splitlines()
+        kept = [l for l in lines if not re.match(r"\s*127\.0\.1\.1\s", l)]
+        kept.append(f"127.0.1.1\t{name}")
+        if kept != lines:
+            f.seek(0)
+            f.write("\n".join(kept) + "\n")
+            f.truncate()
+    ok(f"Hostname {name}" + ("" if current == name else f" (was {current})"), changed=current != name)
+
+
 def delete_connection_files(conn_id):
     """Remove every NetworkManager connection with this id (keyfiles we wrote)."""
     for c in run("nmcli", "-t", "-f", "NAME", "connection", "show").stdout.splitlines():
@@ -626,6 +665,9 @@ def main(argv):
         if run("nmcli", "connection", "delete", "id", args[0]).returncode != 0:
             fail("Could not delete the network")
         ok("Network deleted")
+
+    if cmd == "set-hostname" and len(args) == 1:
+        set_hostname(args[0])
 
     if cmd == "join" and not args:
         join_tailnet()

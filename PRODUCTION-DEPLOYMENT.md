@@ -84,6 +84,10 @@ Re-running `install.sh` on an old station shreds its `.env`.
    URL* → `https://app.alpium.io/api/v1/ogn-stations/imager.json`, then choose
    **Alpium OGN station**. In the OS customisation set an admin user with your
    SSH public key, the Wi-Fi (the site's, or your phone hotspot), the time zone.
+   Every card gets the **same** settings, hostname `ogn` included: the station
+   is known by its serial, and once approved the Pi renames itself
+   `ogn-<serial>`, its name on the tailnet (agent 3.3.4). A batch is the same
+   card written N times; Imager remembers the settings.
 2. Put the card in, connect antenna and network (Ethernet, Wi-Fi, a 4G
    router, or a USB 4G modem whose APN you set later in Alpium), power on.
 3. In Alpium, `/admin/ogn-stations`, *Waiting for approval*: the Pi appears
