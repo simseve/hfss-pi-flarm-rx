@@ -165,7 +165,8 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   the serial; never `ALP`, which on glidernet is an Alpium pilot), and
   changed in *Manage*, *Identity*. Name a receiver after its site
   (http://wiki.glidernet.org/receiver-naming-convention).
-- **Lost or stolen**: Alpium console, Retire. Credentials revoked, tailnet
+- **Lost or stolen**: Alpium console, *Manage → Identity → Danger zone →
+  Retire* (type the serial to confirm). Credentials revoked, tailnet
   node deleted, no more alerts.
 
 ## Field Wi-Fi and 4G
