@@ -40,7 +40,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.0.0"
+AGENT_VERSION = "3.1.0"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +50,8 @@ CREDENTIALS_FILE = os.path.join(HOME, ".ogn_credentials.json")
 AUTHORIZED_KEYS = os.path.join(HOME, ".ssh", "authorized_keys")
 HEARTBEAT_LOG_FILE = os.path.join(HOME, ".ogn_heartbeat_log.json")
 HELPER = "/usr/local/sbin/alpium-ogn-helper"
+UPDATE_STATE = "/var/lib/alpium-ogn/update-state.json"
+UPDATE_LOG = "/var/log/alpium-ogn-update.log"
 
 LISTEN_PORT = 8082
 DEFAULT_HEARTBEAT_INTERVAL = 300
@@ -448,7 +450,36 @@ def h_status(_body):
         "config": read_config(),
         "interfaces": {n: interface_state(n) for n in ("eth0", "eth1", "wlan0")},
         "wifi": helper("wifi-list"),
+        "update": update_info(),
     }
+
+
+def update_info():
+    """The last signed-release update: state written by the root helper's
+    job, and the tail of its log (both world-readable, written only by root)."""
+    try:
+        with open(UPDATE_STATE) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = None
+    try:
+        with open(UPDATE_LOG, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 8192))
+            tail = f.read().decode("utf-8", "replace").splitlines()[-40:]
+    except OSError:
+        tail = []
+    return {"state": state, "log": tail}
+
+
+def h_update(body):
+    # Only passes the release on: the root helper verifies the release key's
+    # signature and the version, and installs in a job of its own.
+    manifest, signature = body.get("manifest"), body.get("signature")
+    if not isinstance(manifest, str) or not isinstance(signature, str):
+        return 400, {"success": False, "message": "manifest and signature required"}
+    r = helper("update", stdin={"manifest": manifest, "signature": signature})
+    return (202 if r.get("success") else 400), r
 
 
 def h_config(body):
@@ -518,6 +549,7 @@ ROUTES = {
     ("POST", "/v1/wifi/psk"): h_wifi_psk,
     ("POST", "/v1/wifi/delete"): h_wifi_delete,
     ("GET", "/v1/heartbeat-log"): h_heartbeat_log,
+    ("POST", "/v1/update"): h_update,
     ("GET", "/v1/ogn/rf"): h_ogn_page(OGN_PAGES["rf"]),
     ("GET", "/v1/ogn/decode"): h_ogn_page(OGN_PAGES["decode"]),
 }

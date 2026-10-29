@@ -19,7 +19,8 @@
 #   --lat/--lon/--alt N    antenna position (degrees, metres AMSL)
 #   --name NAME            station name shown in Alpium (default: callsign)
 #   --enroll-url URL       default https://app.alpium.io/api/v1/ogn-stations/enroll
-#   --no-lan-ssh           also close SSH on the local network (tailnet only)
+#   --no-lan-ssh           also close SSH on the local network (tailnet only;
+#                          remembered in /etc/alpium-ogn/no-lan-ssh)
 #   --keep-ssh-passwords   do not switch sshd to keys only
 #   --skip-ogn             do not (re)install the OGN receiver binaries
 #
@@ -64,6 +65,13 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run with sudo"
+# A choice made once with an option stays made: an update (signed release,
+# run with no options) must not reopen LAN SSH or turn passwords back off.
+[ -f /etc/alpium-ogn/no-lan-ssh ] && LAN_SSH=0
+[ -f /etc/alpium-ogn/keep-ssh-passwords ] && HARDEN_SSH=0
+install -d -m 0755 /etc/alpium-ogn
+if [ "$LAN_SSH" -eq 0 ]; then touch /etc/alpium-ogn/no-lan-ssh; fi
+if [ "$HARDEN_SSH" -eq 0 ]; then touch /etc/alpium-ogn/keep-ssh-passwords; fi
 SRC=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 SERIAL=$(awk -F': ' '/^Serial/{print tolower($2)}' /proc/cpuinfo | tail -c 9 | tr -d '\n')
 [[ "$SERIAL" =~ ^[0-9a-f]{8}$ ]] || die "cannot read the Raspberry Pi serial from /proc/cpuinfo"
@@ -143,7 +151,11 @@ rm -f "$TARGET/ogn-config-web-alpium.py"; rm -rf "$TARGET/static"
 
 # ---------------------------------------------------------------------------
 step "3/9 OGN receiver"
-if [ "$SKIP_OGN" -eq 1 ] && [ -x "$AGENT_HOME/rtlsdr-ogn/ogn-rf" ]; then
+OGN_MARKER=$AGENT_HOME/rtlsdr-ogn/.alpium-ogn-pi34-commit
+if [ -x "$AGENT_HOME/rtlsdr-ogn/ogn-rf" ] && [ "$(cat "$OGN_MARKER" 2>/dev/null)" = "$OGN_PI34_COMMIT" ]; then
+  # Already these binaries: an update need not download them again.
+  echo "   OGN binaries already at the pinned commit"
+elif [ "$SKIP_OGN" -eq 1 ] && [ -x "$AGENT_HOME/rtlsdr-ogn/ogn-rf" ]; then
   echo "   skipped (--skip-ogn)"
 else
   case "$BITS" in
@@ -178,6 +190,7 @@ else
     rm -f "$AGENT_HOME/rtlsdr-ogn/Template.conf"
   fi
   cp "$TMP/WW15MGH.DAC" "$AGENT_HOME/rtlsdr-ogn/WW15MGH.DAC"
+  echo "$OGN_PI34_COMMIT" > "$OGN_MARKER"
   rm -rf "$TMP"
   sed -e "s#/home/pi#$AGENT_HOME#g" -e "s#\bpi\b#$AGENT_USER#" \
     "$AGENT_HOME/rtlsdr-ogn/rtlsdr-ogn.conf" > /etc/rtlsdr-ogn.conf
@@ -229,9 +242,15 @@ TS_KEY="" SSH_KEY=""
 if [ -n "$CODE" ]; then
   step "6/9 Enrollment"
   CALL_NOW=$(awk -F'"' '/Call *=/{print $2; exit}' "$CONF")
-  BODY=$(python3 - "$CODE" "$SERIAL" "${NAME:-$CALL_NOW}" "$CALL_NOW" "$CONF" "$TARGET" <<'PY'
+  HW_SERIAL=$(awk -F': ' '/^Serial/{print tolower($2)}' /proc/cpuinfo | tr -d ' \n')
+  HW_MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)
+  # Alpium is the registry of station identity: it keeps a re-enrolled or
+  # replaced station's callsign, honours ours only if it is free in the
+  # fleet (a placeholder like OGN2085D0 never counts), and answers with the
+  # identity this station must use.
+  BODY=$(python3 - "$CODE" "$SERIAL" "$NAME" "$CALL_NOW" "$CONF" "$TARGET" "$HW_SERIAL" "$HW_MODEL" <<'PY'
 import json, re, sys
-code, serial, name, call, conf, target = sys.argv[1:7]
+code, serial, name, call, conf, target, hw_serial, hw_model = sys.argv[1:9]
 text = open(conf).read()
 def num(key):
     m = re.search(key + r"\s*=\s*([+\d.-]+)", text)
@@ -239,7 +258,8 @@ def num(key):
 version = re.search(r'AGENT_VERSION = "([^"]+)"', open(target + "/ogn-station-agent.py").read())
 print(json.dumps({"code": code, "serial": serial, "name": name or None, "callsign": call or None,
                   "latitude": num("Latitude"), "longitude": num("Longitude"), "altitude": num("Altitude"),
-                  "agent_version": version.group(1) if version else None}))
+                  "agent_version": version.group(1) if version else None,
+                  "hardware_serial": hw_serial or None, "hardware_model": hw_model or None}))
 PY
 )
   RESP=$(mktemp)
@@ -269,6 +289,29 @@ print("SSH_KEY=" + shlex.quote(r["ssh_public_key"]))
 print("DEVICE_ID=" + shlex.quote(r["device_id"]))
 PY
 )"
+  # The registry's identity into the receiver config: the callsign always;
+  # the position on a hardware replacement, or when this Pi has none yet.
+  python3 - "$TARGET" "$CONF" "$RESP" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("agent", sys.argv[1] + "/ogn-station-agent.py")
+agent = importlib.util.module_from_spec(spec); spec.loader.exec_module(agent)
+agent.CONFIG_FILE = sys.argv[2]
+station = json.load(open(sys.argv[3])).get("station") or {}
+cfg = agent.read_config()
+if station.get("callsign"):
+    cfg["call"] = station["callsign"]
+no_position = not cfg["latitude"] and not cfg["longitude"]
+if (station.get("replacement") or no_position) and station.get("latitude") is not None:
+    cfg.update(latitude=station["latitude"], longitude=station["longitude"],
+               altitude=station.get("altitude") or cfg["altitude"])
+cfg, error = agent.validated_config(cfg)
+if error:
+    sys.exit("Station identity from Alpium: " + error)
+agent.write_config(cfg)
+print("   station identity: callsign", cfg["call"], "at", cfg["latitude"], cfg["longitude"], cfg["altitude"],
+      "(hardware replacement)" if station.get("replacement") else "")
+PY
+  chown "$AGENT_USER:$AGENT_USER" "$CONF"
   shred -u "$RESP"
   chown "$AGENT_USER:$AGENT_USER" "$CREDS"
   echo "   enrolled as $DEVICE_ID"
@@ -319,6 +362,12 @@ nft -c -f /etc/alpium-ogn/firewall.nft || die "firewall rules invalid"
 install -m 0644 "$TARGET/system/alpium-ogn-firewall.service" /etc/systemd/system/alpium-ogn-firewall.service
 
 # ---------------------------------------------------------------------------
+# Signed releases (tools/make-release.py): the public half of the offline
+# release key, the installed version, and where the update job keeps state.
+install -o root -g root -m 0644 "$TARGET/system/release-signing.pub" /etc/alpium-ogn/release.pub
+install -d -m 0755 /var/lib/alpium-ogn /opt/alpium-ogn/releases
+
+# ---------------------------------------------------------------------------
 step "9/9 Services"
 install -m 0644 "$TARGET/system/alpium-ogn-station.service" /etc/systemd/system/alpium-ogn-station.service
 systemctl daemon-reload
@@ -326,6 +375,9 @@ systemctl enable alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station
 systemctl restart alpium-ogn-firewall
 systemctl restart rtlsdr-ogn
 systemctl restart alpium-ogn-station
+
+AGENT_VER=$(sed -n 's/^AGENT_VERSION = "\([0-9.]*\)"$/\1/p' "$TARGET/ogn-station-agent.py")
+echo "$AGENT_VER" > /etc/alpium-ogn/version
 
 sleep 5
 echo

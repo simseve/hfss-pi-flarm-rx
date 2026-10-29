@@ -95,8 +95,9 @@ sudo ./install.sh --code OGN-XXXX-XXXX-XXXX-XXXX \
      --callsign MYSITE --lat 46.0123 --lon 8.9123 --alt 1250
 ```
 
-The callsign follows http://wiki.glidernet.org/receiver-naming-convention.
-Position and callsign can also be set later in the station UI. The station
+The callsign follows http://wiki.glidernet.org/receiver-naming-convention;
+Alpium keeps it unique across the fleet and may answer with a placeholder if
+it is taken. Both can be changed later in Alpium. The station
 shows up in Alpium within 5 minutes, as `OGN_STATION_<serial>` on the tailnet
 as `ogn-<serial>`.
 
@@ -122,15 +123,45 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   network, OGN pages, heartbeat log) or *SSH*. Alpium pins each station's
   Tailscale address after checking it against the tailnet, and the Pi's SSH
   host key on first connection.
-- **Update a station**: on the Pi, as an admin user (not hfss, which has no
-  sudo by design): `cd /home/hfss/hfss-pi-flarm-rx && sudo git pull && sudo ./install.sh`.
-  Without `--code` it keeps the enrollment and re-applies agent, units,
-  helper and firewall.
-- **Reinstalled Pi / new SD card**: run the installer with a new code. The
-  old credentials stop working, the old tailnet node is removed, and the
-  console's pins reset.
+- **Update stations**: from Alpium, *Station software* on
+  `/admin/ogn-stations`: pick a release, select a few outdated stations as a
+  canary, check they report the new version, then the rest. Each station
+  verifies the release signature itself, refuses a downgrade and installs in
+  the background (`journalctl -u alpium-ogn-update`,
+  `/var/log/alpium-ogn-update.log`). By hand, as before: `sudo ./install.sh`
+  without `--code` keeps the enrollment and re-applies agent, units, helper
+  and firewall.
+- **Reinstalled Pi / new SD card in the same Pi**: run the installer with a
+  new code. It is the same station (same serial): the old credentials stop
+  working, the old tailnet node is removed, the pins reset, the callsign stays.
+- **Replacing the Pi** (dead board, upgrade): in Alpium, *Manage*, *Identity*,
+  *Replace hardware*, and install the new Pi with that code. It becomes the
+  same station: id, callsign, tailnet name, history and position. A code for
+  new stations refuses a Pi whose id already belongs to another board.
+- **Callsigns** are Alpium's: unique in the fleet, chosen at enrollment (the
+  one you pass with `--callsign` if free, else a placeholder `ALPRX…`), and
+  changed in *Manage*, *Identity*. Name a receiver after its site
+  (http://wiki.glidernet.org/receiver-naming-convention).
 - **Lost or stolen**: Alpium console, Retire. Credentials revoked, tailnet
   node deleted, no more alerts.
+
+## Releasing
+
+On the release machine, which holds the offline release key
+(`~/.ssh/alpium_ogn_release_ed25519`; its public half is
+`system/release-signing.pub`):
+
+```bash
+# bump AGENT_VERSION in ogn-station-agent.py, commit, push, then
+python3 tools/make-release.py --dry-run   # build + sign into dist/, check
+python3 tools/make-release.py             # tag vX.Y.Z and publish with gh
+```
+
+The release is `git archive` of HEAD plus `manifest.json` (version, commit,
+tarball URL, sha256) and `manifest.sig`. Nothing else can make a release: not
+Alpium, not a station. Lose the key and stations can still be updated by
+hand; leak it and rotate it (a release signed by the old key that ships the
+new public key).
 
 ## What runs on a station
 
@@ -140,6 +171,7 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
 | `alpium-ogn-station` | agent: heartbeat + signed control API on :8082 | hfss |
 | `alpium-ogn-firewall` | nftables table `inet alpium_ogn` | root, oneshot |
 | `tailscaled` | tailnet node `ogn-<serial>`, tag:ogn | root |
+| `alpium-ogn-update` | transient: installs a signed release, then exits | root |
 
 The agent is `ogn-station-agent.py`: Python standard library plus
 `cryptography`, no web framework, bodies capped at 16 KB. Its only root access is `/usr/local/sbin/alpium-ogn-helper` (restart

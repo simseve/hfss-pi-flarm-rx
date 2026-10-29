@@ -25,6 +25,7 @@ Everything else, from the Tailscale policy to retiring a lost station, is in
 |---|---|
 | `install.sh` | install / enroll / update (idempotent) |
 | `ogn-station-agent.py` | station agent: heartbeat + signed JSON control API on :8082 (tailnet only, no pages) |
+| `tools/make-release.py` | build, sign (offline release key) and publish a release |
 | `ogn/Template.conf.in` | receiver config template (OGN 0.3.3) |
 | `system/` | systemd units, root helper, sudoers rule, firewall, sshd drop-in |
 

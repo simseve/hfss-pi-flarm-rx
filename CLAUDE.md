@@ -64,3 +64,16 @@ Rules that keep a fleet safe (do not undo them):
   keyfiles (0600), never onto a command line.
 - OGN status pages are on 8080/8081 (upstream 0.3.3 defaults to 8082/8083,
   which would collide with the agent).
+- **Updates are signed releases.** `tools/make-release.py` signs
+  `manifest.json` with the OFFLINE release key; `system/alpium-ogn-helper
+  update` (root) verifies it against `/etc/alpium-ogn/release.pub`, refuses a
+  version not newer than `/etc/alpium-ogn/version` and a URL outside this
+  repo's releases, and installs in the transient unit `alpium-ogn-update`.
+  Never let the agent, Alpium or anything unsigned trigger an install. Bump
+  `AGENT_VERSION` for every release; `install.sh` must keep working with no
+  options, since that is how an update runs it.
+- **Identity is Alpium's.** The station id, tailnet name and callsign come
+  from Alpium at enrollment (the installer sends the Pi's full serial and
+  model, and writes back the callsign it is given). Never derive a callsign
+  on the station or change it locally; Alpium changes it through the signed
+  config call.

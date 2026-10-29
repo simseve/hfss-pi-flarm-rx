@@ -14,3 +14,4 @@ nohup.out
 
 # OGN specific
 ogn-rf.fifo
+dist/

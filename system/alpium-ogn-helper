@@ -14,21 +14,53 @@ must not be able to turn a request into an arbitrary root command.
   wifi-add      < JSON         {"ssid", "psk", "priority"}
   wifi-set-psk  < JSON         {"name", "psk"}
   wifi-delete NAME             delete a saved Wi-Fi network
+  update        < JSON         {"manifest", "signature"}: verify a signed
+                               release and start installing it in a job of
+                               its own (unit alpium-ogn-update)
+  apply-update                 that job: download, check, install (run by
+                               systemd, not by the agent)
+
+Releases are signed OFFLINE with the release key (tools/make-release.py);
+its public half is /etc/alpium-ogn/release.pub. Neither the agent nor Alpium
+can make a release: a compromised server can only offer versions the release
+key signed, and never an older one than is installed.
 
 Wi-Fi is NetworkManager (Raspberry Pi OS Bookworm and Trixie). A password is
 written into a 0600 keyfile and never passed on a command line, where any
 local user could read it in the process list.
 """
+import base64
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
+import time
+import urllib.request
 import uuid
 
 IFACES = {"wlan0", "eth0", "eth1"}
 NM_DIR = "/etc/NetworkManager/system-connections"
 OGN_SERVICE = "rtlsdr-ogn"
+
+RELEASE_KEY = "/etc/alpium-ogn/release.pub"
+VERSION_FILE = "/etc/alpium-ogn/version"
+STATE_DIR = "/var/lib/alpium-ogn"
+PENDING_RELEASE = STATE_DIR + "/pending-release.json"
+UPDATE_STATE = STATE_DIR + "/update-state.json"
+UPDATE_LOG = "/var/log/alpium-ogn-update.log"
+RELEASES_DIR = "/opt/alpium-ogn/releases"
+RELEASES_KEEP = 3
+UPDATE_UNIT = "alpium-ogn-update"
+HELPER_PATH = "/usr/local/sbin/alpium-ogn-helper"
+RELEASE_CONTEXT = b"alpium-ogn-release-v1\n"
+RELEASE_NAME = "hfss-pi-flarm-rx"
+RELEASE_URL_PREFIX = "https://github.com/simseve/hfss-pi-flarm-rx/releases/download/"
+MAX_TARBALL = 20 * 1024 * 1024
+VERSION_RE = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")
 
 
 def fail(message, code=1):
@@ -107,6 +139,172 @@ def write_keyfile(ssid, psk, priority):
         fail("NetworkManager refused the new network")
 
 
+# ---------------------------------------------------------------------------
+# Signed releases
+# ---------------------------------------------------------------------------
+
+def version_tuple(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def installed_version():
+    try:
+        with open(VERSION_FILE) as f:
+            v = f.read().strip()
+        return v if VERSION_RE.match(v) else "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+def verify_release(manifest_text, signature):
+    """The manifest as a dict if the release key signed it, else fail()."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives.serialization import load_ssh_public_key
+    if not isinstance(manifest_text, str) or not isinstance(signature, str) or len(manifest_text) > 4096:
+        fail("Malformed release")
+    try:
+        with open(RELEASE_KEY) as f:
+            key = load_ssh_public_key(" ".join(f.read().split()[:2]).encode())
+    except (OSError, ValueError):
+        fail("No release key installed; re-run install.sh")
+    if not isinstance(key, Ed25519PublicKey):
+        fail("Release key is not Ed25519")
+    try:
+        key.verify(base64.b64decode(signature, validate=True), RELEASE_CONTEXT + manifest_text.encode("utf-8"))
+    except (InvalidSignature, ValueError):
+        fail("Release signature does not verify")
+    try:
+        m = json.loads(manifest_text)
+    except ValueError:
+        fail("Malformed manifest")
+    if not isinstance(m, dict) or m.get("name") != RELEASE_NAME:
+        fail("Not a release of this software")
+    if not VERSION_RE.match(str(m.get("version", ""))):
+        fail("Bad version in manifest")
+    url = m.get("url")
+    if not isinstance(url, str) or not url.startswith(RELEASE_URL_PREFIX) or not url.endswith(".tar.gz"):
+        fail("Release URL not allowed")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(m.get("sha256", ""))):
+        fail("Bad checksum in manifest")
+    return m
+
+
+def write_state(**state):
+    os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
+    state["at"] = int(time.time())
+    tmp = UPDATE_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, UPDATE_STATE)
+
+
+def log(line):
+    with open(UPDATE_LOG, "a") as f:
+        f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + line.rstrip() + "\n")
+    os.chmod(UPDATE_LOG, 0o644)
+
+
+def start_update():
+    d = read_json()
+    m = verify_release(d.get("manifest"), d.get("signature"))
+    current = installed_version()
+    if version_tuple(m["version"]) <= version_tuple(current):
+        fail(f"Version {m['version']} is not newer than the installed {current}")
+    if run("systemctl", "is-active", "--quiet", UPDATE_UNIT).returncode == 0:
+        fail("An update is already running")
+    os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
+    fd = os.open(PENDING_RELEASE + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"manifest": d["manifest"], "signature": d["signature"]}, f)
+    os.replace(PENDING_RELEASE + ".tmp", PENDING_RELEASE)
+    write_state(state="queued", version=m["version"], previous=current)
+    # Its own transient unit: the install restarts the agent, and a child of
+    # the agent would be killed with it.
+    r = run("systemd-run", f"--unit={UPDATE_UNIT}", "--collect", "--quiet",
+            "--property=TimeoutStartSec=1800", "--", HELPER_PATH, "apply-update")
+    if r.returncode != 0:
+        write_state(state="failed", version=m["version"], previous=current, error="could not start the job")
+        fail("Could not start the update job: " + (r.stderr or "").strip()[:200])
+    ok(f"Update to {m['version']} started", version=m["version"], previous=current)
+
+
+def safe_members(tar, root):
+    for member in tar.getmembers():
+        name = member.name
+        if name.startswith("/") or ".." in name.split("/") or not (name == root or name.startswith(root + "/")):
+            raise RuntimeError(f"unsafe path in release: {name}")
+        if member.issym() or member.islnk() or member.isdev():
+            raise RuntimeError(f"link or device in release: {name}")
+    return tar.getmembers()
+
+
+def apply_update():
+    try:
+        with open(PENDING_RELEASE) as f:
+            pending = json.load(f)
+    except (OSError, ValueError):
+        fail("No pending release")
+    try:
+        m = verify_release(pending.get("manifest"), pending.get("signature"))
+    except SystemExit:
+        write_state(state="failed", error="pending release did not verify")
+        raise
+    version, current = m["version"], installed_version()
+    write_state(state="running", version=version, previous=current)
+    log(f"== update {current} -> {version} ({m.get('commit', '')[:12]})")
+    try:
+        os.makedirs(RELEASES_DIR, mode=0o755, exist_ok=True)
+        tarball = os.path.join(RELEASES_DIR, f"{RELEASE_NAME}-{version}.tar.gz")
+        digest = hashlib.sha256()
+        size = 0
+        with urllib.request.urlopen(m["url"], timeout=60) as r, open(tarball, "wb") as out:
+            while True:
+                chunk = r.read(65536)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_TARBALL:
+                    raise RuntimeError("release too large")
+                digest.update(chunk)
+                out.write(chunk)
+        if digest.hexdigest() != m["sha256"]:
+            raise RuntimeError("downloaded release does not match its signed checksum")
+        log(f"downloaded {size} bytes, checksum ok")
+        dest = os.path.join(RELEASES_DIR, version)
+        shutil.rmtree(dest, ignore_errors=True)
+        os.makedirs(dest, mode=0o755)
+        with tarfile.open(tarball, "r:gz") as tar:
+            members = safe_members(tar, RELEASE_NAME)
+            tar.extractall(dest, members=members)
+        os.unlink(tarball)
+        installer = os.path.join(dest, RELEASE_NAME, "install.sh")
+        with open(UPDATE_LOG, "a") as logf:
+            rc = subprocess.run(["/bin/bash", installer], stdout=logf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, timeout=1500,
+                                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}).returncode
+        if rc != 0:
+            raise RuntimeError(f"install.sh exited {rc}")
+        if installed_version() != version:
+            raise RuntimeError(f"installed version is {installed_version()}, expected {version}")
+    except Exception as e:
+        log(f"FAILED: {e}")
+        write_state(state="failed", version=version, previous=current, error=str(e)[:300])
+        fail(str(e))
+    finally:
+        try:
+            os.unlink(PENDING_RELEASE)
+        except OSError:
+            pass
+    kept = sorted((d for d in os.listdir(RELEASES_DIR) if VERSION_RE.match(d)), key=version_tuple)
+    for old in kept[:-RELEASES_KEEP]:
+        shutil.rmtree(os.path.join(RELEASES_DIR, old), ignore_errors=True)
+    log(f"done: {version}")
+    write_state(state="done", version=version, previous=current)
+    ok(f"Updated to {version}")
+
+
 def main(argv):
     if not argv:
         fail("No command")
@@ -176,6 +374,12 @@ def main(argv):
         if run("nmcli", "connection", "delete", "id", args[0]).returncode != 0:
             fail("Could not delete the network")
         ok("Network deleted")
+
+    if cmd == "update" and not args:
+        start_update()
+
+    if cmd == "apply-update" and not args:
+        apply_update()
 
     fail("Unknown command")
 
