@@ -213,6 +213,7 @@ fi
 CONF=$AGENT_HOME/rtlsdr-ogn/Template.conf
 if [ ! -f "$CONF" ] || ! grep -q "Alpium station agent" "$CONF" || [ -n "$CALLSIGN$LAT$LON$ALT" ]; then
   sudo -u "$AGENT_USER" python3 - "$TARGET" "$CONF" "${CALLSIGN}" "${LAT}" "${LON}" "${ALT}" <<'PY'
+import re
 import sys
 sys.path.insert(0, sys.argv[1])
 import importlib.util
@@ -223,9 +224,11 @@ cfg = agent.read_config()
 for key, value in zip(("call", "latitude", "longitude", "altitude"), sys.argv[3:7]):
     if value:
         cfg[key] = value
-if cfg["call"] == "NOCALL" and agent.get_serial() != "unknown":
-    # A placeholder until Alpium names the station (never kept by Alpium).
-    cfg["call"] = "OGN" + agent.get_serial()[-6:].upper()
+if (cfg["call"] == "NOCALL" or re.fullmatch(r"OGN[0-9A-F]{6}", cfg["call"])) and agent.get_serial() != "unknown":
+    # A placeholder until Alpium names the station: RX + 7 hex of the serial,
+    # the same one Alpium generates. Never OGN + hex (an OGN tracker's
+    # address) or ALP (an Alpium pilot on glidernet).
+    cfg["call"] = "RX" + agent.get_serial()[-7:].upper()
 cfg, error = agent.validated_config(cfg)
 if error:
     sys.exit("Receiver configuration: " + error)

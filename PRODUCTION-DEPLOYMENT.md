@@ -157,7 +157,8 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   same station: id, callsign, tailnet name, history and position. A code for
   new stations refuses a Pi whose id already belongs to another board.
 - **Callsigns** are Alpium's: unique in the fleet, chosen at enrollment (the
-  one you pass with `--callsign` if free, else a placeholder `ALPRX…`), and
+  one you pass with `--callsign` if free, else a placeholder `RX` + 7 hex of
+  the serial; never `ALP`, which on glidernet is an Alpium pilot), and
   changed in *Manage*, *Identity*. Name a receiver after its site
   (http://wiki.glidernet.org/receiver-naming-convention).
 - **Lost or stolen**: Alpium console, Retire. Credentials revoked, tailnet
