@@ -2,6 +2,11 @@
 # Build the Alpium OGN station card image (Raspberry Pi 4/5, 64-bit).
 #
 #   sudo tools/build-image.sh [OUTPUT_DIR]
+#   sudo SRC=/path/to/release/checkout tools/build-image.sh [OUTPUT_DIR]
+#
+# SRC is the checkout whose code goes INTO the image (default: this repo);
+# the workflow points it at the release tag while running this script from
+# main, so a fix to the build reaches an already published release.
 #
 # Takes the official Raspberry Pi OS Lite (64-bit) image listed in Raspberry
 # Pi Imager's own catalogue, grows it, runs `install.sh --image` inside it
@@ -27,7 +32,8 @@ for t in curl jq xz losetup parted e2fsck resize2fs sha256sum; do
   command -v "$t" >/dev/null || die "missing $t"
 done
 
-REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+REPO=${SRC:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}
+REPO=$(cd "$REPO" && pwd)
 VERSION=$(sed -n 's/^AGENT_VERSION = "\([0-9.]*\)"$/\1/p' "$REPO/ogn-station-agent.py")
 [ -n "$VERSION" ] || die "cannot read AGENT_VERSION"
 mkdir -p "$OUT"
@@ -51,13 +57,19 @@ curl -fsSL "$OS_LIST" -o "$WORK/os_list.json"
 BASE=$(jq -c '[.. | objects | select(.name? and (.name | test("^Raspberry Pi OS Lite \\(64-bit\\)$")) and .url?)][0]' "$WORK/os_list.json")
 [ "$BASE" != "null" ] || die "Raspberry Pi OS Lite (64-bit) not found in $OS_LIST"
 BASE_URL=$(jq -r .url <<<"$BASE")
-BASE_SHA=$(jq -r .image_download_sha256 <<<"$BASE")
+BASE_EXTRACT_SHA=$(jq -r .extract_sha256 <<<"$BASE")
 INIT_FORMAT=$(jq -r '.init_format // "systemd"' <<<"$BASE")
+[[ "$BASE_EXTRACT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "catalogue entry has no extract_sha256"
 echo "   $BASE_URL (init_format $INIT_FORMAT)"
 curl -fsSL "$BASE_URL" -o "$WORK/base.img.xz"
-echo "$BASE_SHA  $WORK/base.img.xz" | sha256sum -c --quiet || die "base image checksum mismatch"
+# Two independent checks: the download against the .sha256 file published
+# next to it, the unpacked image against Imager's catalogue.
+BASE_DL_SHA=$(curl -fsSL "$BASE_URL.sha256" | awk '{print $1}')
+[[ "$BASE_DL_SHA" =~ ^[0-9a-f]{64}$ ]] || die "no .sha256 next to the base image"
+echo "$BASE_DL_SHA  $WORK/base.img.xz" | sha256sum -c --quiet || die "base image download checksum mismatch"
 xz -d -T0 "$WORK/base.img.xz"
 IMG=$WORK/base.img
+echo "$BASE_EXTRACT_SHA  $IMG" | sha256sum -c --quiet || die "base image does not match Imager's catalogue"
 
 echo "== Grow the root partition by ${GROW_MB} MB"
 truncate -s +"${GROW_MB}M" "$IMG"
@@ -76,7 +88,7 @@ mount -t proc proc "$MNT/proc"
 mount -t sysfs sys "$MNT/sys"
 cp --remove-destination /etc/resolv.conf "$MNT/etc/resolv.conf"
 mkdir -p "$MNT/tmp/station-src"
-git -C "$REPO" archive HEAD | tar -x -C "$MNT/tmp/station-src"
+git -c safe.directory="$REPO" -C "$REPO" archive HEAD | tar -x -C "$MNT/tmp/station-src"
 chroot "$MNT" /bin/bash /tmp/station-src/install.sh --image
 chroot "$MNT" /bin/bash -c 'apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/station-src'
 # The image's resolv.conf is NetworkManager's to write at first boot.
@@ -102,7 +114,7 @@ DL_SHA=$(sha256sum "$OUT/$NAME.xz" | cut -d' ' -f1)
 jq -n --arg version "$VERSION" --arg file "$NAME.xz" --arg base "$BASE_URL" --arg init "$INIT_FORMAT" \
       --argjson extract_size "$EXTRACT_SIZE" --arg extract_sha256 "$EXTRACT_SHA" \
       --argjson download_size "$DL_SIZE" --arg download_sha256 "$DL_SHA" \
-      --arg commit "$(git -C "$REPO" rev-parse HEAD)" \
+      --arg commit "$(git -c safe.directory="$REPO" -C "$REPO" rev-parse HEAD)" \
       '{version: $version, file: $file, commit: $commit, base_image: $base, init_format: $init,
         extract_size: $extract_size, extract_sha256: $extract_sha256,
         image_download_size: $download_size, image_download_sha256: $download_sha256}' \

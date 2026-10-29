@@ -21,13 +21,20 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
+      # The build script from main (so a fix reaches a published release),
+      # the code that goes into the image from the release tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: build
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
+          path: src
       - name: Tools
         run: sudo apt-get update -q && sudo apt-get install -y -q jq xz-utils parted e2fsprogs
       - name: Build
-        run: sudo tools/build-image.sh dist
+        run: sudo SRC="$PWD/src" build/tools/build-image.sh dist
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
