@@ -11,10 +11,17 @@ server side is documented in the Alpium repo, `docs/OGN_STATIONS.md`.
   station alone and a **single-use, pre-authorised Tailscale key** tagged
   `tag:ogn`. Losing one Pi loses one station's credentials, which an admin
   revokes with one click (Retire).
-- **Reachable over the tailnet only.** The station UI (8082), the OGN status
-  pages (8080/8081) and procServ (50000/50001) are closed to the local network
-  by the firewall; the agent also refuses non-tailnet clients itself. SSH is
-  key-only. Who on the tailnet may connect is decided by Tailscale ACLs.
+- **No web pages; Alpium is the interface.** The station runs a small JSON
+  control API (8082) whose only client is Alpium's server, and every request
+  must be signed with Alpium's station key (the station received the public
+  half at enrollment). Being on the tailnet is not enough to command it.
+  Admins manage stations in Alpium (`/admin/ogn-stations`, *Manage*): status,
+  receiver settings, network and Wi-Fi, the OGN status pages, the heartbeat
+  log, and an SSH shell.
+- **Reachable over the tailnet only.** From the tailnet only 22 and 8082 are
+  open; the OGN status pages (8080/8081) and procServ (50000/50001) are local
+  and the agent relays the status pages to Alpium. SSH is key-only. Who on the
+  tailnet may connect is decided by Tailscale ACLs.
 - **Survives reboots.** Everything is a systemd service.
 - **Alpium notices.** The agent sends a heartbeat every 5 minutes. A station
   silent for 30 minutes raises a Sentry issue that says whether the Pi is
@@ -36,9 +43,10 @@ nothing; only the server and the admins reach them:
     "tag:alpium-server": ["autogroup:admin"]
   },
   "grants": [
-    // Alpium's server and the admins may open a station's pages and shell.
-    { "src": ["tag:alpium-server", "autogroup:admin"],
-      "dst": ["tag:ogn"], "ip": ["tcp:22", "tcp:8080-8082"] }
+    // Alpium's server: the signed control API and SSH.
+    { "src": ["tag:alpium-server"], "dst": ["tag:ogn"], "ip": ["tcp:22", "tcp:8082"] },
+    // Admins: SSH only, for a rescue from a laptop.
+    { "src": ["autogroup:admin"], "dst": ["tag:ogn"], "ip": ["tcp:22"] }
 
     // ...your other rules for people and servers. Do NOT add any rule whose
     // src is tag:ogn: a station needs no inbound path to anything.
@@ -70,7 +78,8 @@ Re-running `install.sh` on an old station shreds its `.env`.
 
 ## Installing a station
 
-1. Flash **Raspberry Pi OS Lite (Trixie, Debian 13)**, 32 or 64 bit. In
+1. Flash **Raspberry Pi OS Lite (Trixie, Debian 13)**, 32 or 64 bit
+   (Bookworm is accepted too, see *Converting an old station*). In
    Raspberry Pi Imager, set a user, Wi-Fi if needed, and **your SSH public
    key** (password SSH is switched off by the installer).
 2. Get a code: Alpium, `/admin/ogn-stations`, *Enroll new stations*. One code
@@ -98,11 +107,21 @@ as `ogn-<serial>`.
 | `--skip-ogn` | do not reinstall the OGN binaries |
 | `--enroll-url URL` | another Alpium instance |
 
+### Converting an old station
+
+A station from the old setup (ogn-pi34 under ~hfss/ogn-pi34, the Flask UI
+started with `nohup sudo`) converts in place: clone this repo next to it and
+run the installer with a code. It stops and removes the old agent and the old
+`ogn-rf`/`ogn-decode` units (whatever unit, crontab or rc.local line started
+them), shreds the old `.env`, and keeps the receiver settings from the old
+`Template.conf`, FreqCorr included (a calibration of that dongle).
+
 ## Operating
 
-- **Open a station**: Alpium console, Station UI / OGN Demodulator / SSH.
-  The console pins each station's Tailscale address after checking it against
-  the tailnet, and the Pi's SSH host key on first connection.
+- **Open a station**: Alpium console, *Manage* (status, receiver settings,
+  network, OGN pages, heartbeat log) or *SSH*. Alpium pins each station's
+  Tailscale address after checking it against the tailnet, and the Pi's SSH
+  host key on first connection.
 - **Update a station**: on the Pi, as an admin user (not hfss, which has no
   sudo by design): `cd /home/hfss/hfss-pi-flarm-rx && sudo git pull && sudo ./install.sh`.
   Without `--code` it keeps the enrollment and re-applies agent, units,
@@ -118,11 +137,12 @@ as `ogn-<serial>`.
 | Unit | What | User |
 |---|---|---|
 | `rtlsdr-ogn` | ogn-rf + ogn-decode under procServ (OGN 0.3.3, pinned + checksummed) | hfss |
-| `alpium-ogn-station` | agent: heartbeat + UI on :8082 | hfss |
+| `alpium-ogn-station` | agent: heartbeat + signed control API on :8082 | hfss |
 | `alpium-ogn-firewall` | nftables table `inet alpium_ogn` | root, oneshot |
 | `tailscaled` | tailnet node `ogn-<serial>`, tag:ogn | root |
 
-The agent's only root access is `/usr/local/sbin/alpium-ogn-helper` (restart
+The agent is `ogn-station-agent.py`: Python standard library plus
+`cryptography`, no web framework, bodies capped at 16 KB. Its only root access is `/usr/local/sbin/alpium-ogn-helper` (restart
 the receiver, Wi-Fi through NetworkManager keyfiles, interface up/down with a
 refusal to drop the last default route), allowed by `/etc/sudoers.d/alpium-ogn`.
 
@@ -135,7 +155,8 @@ Files: `~hfss/.ogn_credentials.json` (0600, this station's credentials),
 ```bash
 systemctl status alpium-ogn-station rtlsdr-ogn tailscaled
 journalctl -u alpium-ogn-station -n 50
-curl -s http://127.0.0.1:8082/api/health | python3 -m json.tool
+curl -s http://127.0.0.1:8082/v1/health | python3 -m json.tool   # the one unsigned call
+curl -s http://127.0.0.1:8081/ | head                            # OGN status, local only
 tailscale status
 sudo nft list table inet alpium_ogn
 telnet localhost 50000      # ogn-rf console
@@ -143,6 +164,9 @@ telnet localhost 50001      # ogn-decode console
 rtl_test -t                 # is the dongle seen
 ```
 
+- Alpium says "Station refused the server's signature": the station's clock
+  is more than 60 s off (`timedatectl`, chrony) or it was enrolled against
+  another Alpium. The refusal reason is in `journalctl -u alpium-ogn-station`.
 - Heartbeat 401/403: credentials revoked (station retired or re-enrolled
   elsewhere). Re-enroll with a new code.
 - Not on the tailnet after enrollment: the single-use key expired (1 hour)

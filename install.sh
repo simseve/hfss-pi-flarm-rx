@@ -23,7 +23,8 @@
 #   --keep-ssh-passwords   do not switch sshd to keys only
 #   --skip-ogn             do not (re)install the OGN receiver binaries
 #
-# Supported: Raspberry Pi OS based on Debian 13 (Trixie), 32 or 64 bit.
+# Supported: Raspberry Pi OS based on Debian 13 (Trixie) or 12 (Bookworm),
+# 32 or 64 bit.
 set -euo pipefail
 
 AGENT_USER=hfss
@@ -66,8 +67,14 @@ done
 SRC=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 SERIAL=$(awk -F': ' '/^Serial/{print tolower($2)}' /proc/cpuinfo | tail -c 9 | tr -d '\n')
 [[ "$SERIAL" =~ ^[0-9a-f]{8}$ ]] || die "cannot read the Raspberry Pi serial from /proc/cpuinfo"
+# shellcheck source=/dev/null
 DIST=$(. /etc/os-release && echo "${VERSION_ID:-}")
-[ "$DIST" = "13" ] || die "needs Raspberry Pi OS based on Debian 13 (Trixie); this is Debian ${DIST:-unknown}"
+# Trixie for new stations; Bookworm so a station already in the field can be
+# converted in place, without a site visit to reflash it.
+case "$DIST" in
+  13|12) ;;
+  *) die "needs Raspberry Pi OS based on Debian 13 (Trixie) or 12 (Bookworm); this is Debian ${DIST:-unknown}" ;;
+esac
 BITS=$(getconf LONG_BIT)
 CREDS=$AGENT_HOME/.ogn_credentials.json
 if [ -z "$CODE" ] && [ ! -s "$CREDS" ]; then
@@ -84,7 +91,7 @@ step "1/9 Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q librtlsdr0 rtl-sdr libfftw3-bin libusb-1.0-0 procserv \
-  chrony curl ca-certificates git python3 python3-flask python3-requests \
+  chrony curl ca-certificates git python3 python3-cryptography python3-requests \
   nftables network-manager sudo openssh-server
 echo 'blacklist dvb_usb_rtl28xxu' > /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
 
@@ -104,7 +111,35 @@ chown -R "$AGENT_USER:$AGENT_USER" "$TARGET"
 for old in "$TARGET/.env" "$SRC/.env"; do
   [ -f "$old" ] && shred -u "$old" && echo "   removed old shared-secret file $old"
 done
-pkill -f "python3 ogn-config-web-alpium.py" 2>/dev/null || true
+# The old agent served a web UI on :8082 with no authentication, as root, and
+# the old ogn-pi34 install ran its own ogn-rf/ogn-decode units, which would
+# fight rtlsdr-ogn for the dongle. Whatever started them at boot goes.
+for unit in /etc/systemd/system/*.service; do
+  [ -f "$unit" ] || continue
+  case "$(basename "$unit")" in rtlsdr-ogn.service|alpium-ogn-*.service) continue ;; esac
+  if grep -qE "ogn-config-web-alpium|ogn-pi34" "$unit"; then
+    systemctl disable --now "$(basename "$unit")" 2>/dev/null || true
+    rm -f "$unit"
+    echo "   removed old unit $(basename "$unit")"
+  fi
+done
+for u in root "$AGENT_USER" pi; do
+  if crontab -u "$u" -l 2>/dev/null | grep -q "ogn-config-web-alpium"; then
+    crontab -u "$u" -l | grep -v "ogn-config-web-alpium" | crontab -u "$u" -
+    echo "   removed old @reboot entry from $u's crontab"
+  fi
+done
+[ -f /etc/rc.local ] && sed -i '/ogn-config-web-alpium/d' /etc/rc.local
+pkill -f "ogn-config-web-alpium.py" 2>/dev/null || true
+# The old LSB rtlsdr-ogn script started ogn-rf/ogn-decode under procServ from
+# ~/ogn-pi34. Stop it while its script still exists, then make sure nothing of
+# it is left holding the dongle or ports 50000/50001/8080/8081.
+systemctl stop rtlsdr-ogn 2>/dev/null || true
+pkill -f "procServ.*ogn-(rf|decode)" 2>/dev/null || true
+pkill -x ogn-rf 2>/dev/null || true
+pkill -x ogn-decode 2>/dev/null || true
+systemctl daemon-reload
+rm -f "$TARGET/ogn-config-web-alpium.py"; rm -rf "$TARGET/static"
 
 # ---------------------------------------------------------------------------
 step "3/9 OGN receiver"
@@ -124,7 +159,16 @@ else
   echo "$OGN_SHA_EGM  $TMP/WW15MGH.DAC" | sha256sum -c --quiet || die "EGM grid failed its checksum"
   systemctl stop rtlsdr-ogn 2>/dev/null || true
   # The tarball carries upstream's Template.conf: keep this station's own.
-  [ -f "$AGENT_HOME/rtlsdr-ogn/Template.conf" ] && cp -p "$AGENT_HOME/rtlsdr-ogn/Template.conf" "$TMP/Template.conf.keep"
+  # A station from the old ogn-pi34 layout keeps its settings too (its
+  # FreqCorr is a calibration of THIS dongle; losing it costs reception).
+  OLD_CONF=""
+  for c in "$AGENT_HOME/rtlsdr-ogn/Template.conf" "$AGENT_HOME"/ogn-pi34/rtlsdr-ogn*/Template.conf; do
+    [ -f "$c" ] && { OLD_CONF=$c; break; }
+  done
+  if [ -n "$OLD_CONF" ]; then
+    cp -p "$OLD_CONF" "$TMP/Template.conf.keep"
+    echo "   keeping receiver settings from $OLD_CONF"
+  fi
   tar xzf "$TMP/ogn.tgz" -C "$AGENT_HOME"
   if [ -f "$TMP/Template.conf.keep" ]; then
     cp -p "$TMP/Template.conf.keep" "$AGENT_HOME/rtlsdr-ogn/Template.conf"
@@ -147,7 +191,7 @@ if [ ! -f "$CONF" ] || ! grep -q "Alpium station agent" "$CONF" || [ -n "$CALLSI
 import sys
 sys.path.insert(0, sys.argv[1])
 import importlib.util
-spec = importlib.util.spec_from_file_location("agent", sys.argv[1] + "/ogn-config-web-alpium.py")
+spec = importlib.util.spec_from_file_location("agent", sys.argv[1] + "/ogn-station-agent.py")
 agent = importlib.util.module_from_spec(spec); spec.loader.exec_module(agent)
 agent.CONFIG_FILE = sys.argv[2]
 cfg = agent.read_config()
@@ -192,7 +236,7 @@ text = open(conf).read()
 def num(key):
     m = re.search(key + r"\s*=\s*([+\d.-]+)", text)
     return float(m.group(1)) if m else None
-version = re.search(r'AGENT_VERSION = "([^"]+)"', open(target + "/ogn-config-web-alpium.py").read())
+version = re.search(r'AGENT_VERSION = "([^"]+)"', open(target + "/ogn-station-agent.py").read())
 print(json.dumps({"code": code, "serial": serial, "name": name or None, "callsign": call or None,
                   "latitude": num("Latitude"), "longitude": num("Longitude"), "altitude": num("Altitude"),
                   "agent_version": version.group(1) if version else None}))
@@ -212,6 +256,8 @@ import json, os, shlex, sys
 r = json.load(open(sys.argv[1]))
 keep = {k: r.get(k) for k in ("device_id", "api_key", "mqtt_username", "mqtt_password", "server_url",
                               "heartbeat_interval", "cf_access_client_id", "cf_access_client_secret")}
+# Alpium's public key: every control request must be signed with its pair.
+keep["control_public_key"] = r.get("control_public_key") or r["ssh_public_key"]
 fd = os.open(sys.argv[2] + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:
     json.dump(keep, f, indent=2)
@@ -286,8 +332,8 @@ echo
 for s in alpium-ogn-firewall rtlsdr-ogn alpium-ogn-station tailscaled; do
   printf '   %-22s %s\n' "$s" "$(systemctl is-active "$s" || true)"
 done
-if curl -fsS http://127.0.0.1:8082/api/health >/dev/null; then
-  echo "   station agent answers on :8082"
+if curl -fsS http://127.0.0.1:8082/v1/health >/dev/null; then
+  echo "   station agent answers on :8082 (signed control API, no web pages)"
 else
   echo "   WARNING: station agent not answering yet; see: journalctl -u alpium-ogn-station"
 fi

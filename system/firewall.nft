@@ -2,9 +2,10 @@
 # Inbound firewall of an Alpium OGN station (docs: PRODUCTION-DEPLOYMENT.md).
 #
 # The station sits on networks we do not control (a club house, a hut, a
-# farmer's router). Nothing it serves is for that network: the station UI
-# (8082), the OGN status pages (8080/8081) and procServ (50000/50001) are
-# reached only over the tailnet, where Tailscale ACLs decide who may connect.
+# farmer's router). It serves no web pages. From the tailnet only two ports
+# are open: the signed control API (8082, Alpium's server is its only client)
+# and SSH. The OGN status pages (8080/8081) and procServ (50000/50001) are
+# local only; the agent relays the status pages to Alpium.
 # On the local network only SSH is open (key-only, see sshd drop-in), for an
 # on-site rescue when Tailscale itself is down; install.sh --no-lan-ssh
 # closes it too.
@@ -29,8 +30,9 @@ table inet alpium_ogn {
     udp sport 67 udp dport 68 accept
     udp sport 547 udp dport 546 accept
 
-    # Everything on the tailnet; Tailscale ACLs filter it before it gets here.
-    iifname "tailscale0" accept
+    # From the tailnet: SSH and the control API only. Tailscale ACLs decide
+    # who may connect; the API also requires Alpium's signature.
+    iifname "tailscale0" tcp dport { 22, 8082 } accept
 
     # Tailscale direct connections.
     udp dport 41641 accept

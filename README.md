@@ -1,7 +1,9 @@
 # Alpium OGN station (Raspberry Pi)
 
 An Open Glider Network receiver (RTL-SDR dongle + 868 MHz antenna) that also
-reports to Alpium and is managed from Alpium's console over Tailscale.
+reports to Alpium and is managed from Alpium's console over Tailscale. The
+station serves no web pages: Alpium is its interface, and it accepts commands
+only when they are signed by Alpium.
 
 ```bash
 sudo apt-get install -y git
@@ -11,7 +13,8 @@ sudo ./install.sh --code OGN-XXXX-XXXX-XXXX-XXXX --callsign MYSITE --lat 46.01 -
 ```
 
 The code comes from an Alpium admin (`/admin/ogn-stations`, *Enroll new
-stations*). Needs Raspberry Pi OS Lite based on Debian 13 (Trixie).
+stations*). Needs Raspberry Pi OS Lite based on Debian 13 (Trixie); Debian 12
+(Bookworm) is accepted so a station already in the field converts in place.
 
 Everything else, from the Tailscale policy to retiring a lost station, is in
 [PRODUCTION-DEPLOYMENT.md](PRODUCTION-DEPLOYMENT.md).
@@ -21,8 +24,7 @@ Everything else, from the Tailscale policy to retiring a lost station, is in
 | Path | What |
 |---|---|
 | `install.sh` | install / enroll / update (idempotent) |
-| `ogn-config-web-alpium.py` | station agent: heartbeat + UI on :8082 (tailnet only) |
-| `static/` | the UI's CSS and JS (no inline script: the UI is also served through Alpium's proxy) |
+| `ogn-station-agent.py` | station agent: heartbeat + signed JSON control API on :8082 (tailnet only, no pages) |
 | `ogn/Template.conf.in` | receiver config template (OGN 0.3.3) |
 | `system/` | systemd units, root helper, sudoers rule, firewall, sshd drop-in |
 

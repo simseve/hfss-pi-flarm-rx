@@ -1,5 +1,5 @@
-# The Alpium station agent: the station UI on :8082 (reached only over the
-# tailnet, see firewall.nft) and the heartbeat to Alpium. Runs as hfss; the
+# The Alpium station agent: the signed control API on :8082 (no web pages;
+# reached only over the tailnet, see firewall.nft) and the heartbeat to Alpium. Runs as hfss; the
 # few root actions go through /usr/local/sbin/alpium-ogn-helper via sudo.
 # Restarted forever, so a crash or a power cut never leaves a station silent
 # until somebody re-runs the installer.
@@ -13,7 +13,7 @@ User=hfss
 Group=hfss
 WorkingDirectory=/home/hfss/hfss-pi-flarm-rx
 EnvironmentFile=-/etc/default/alpium-ogn-station
-ExecStart=/usr/bin/python3 -u /home/hfss/hfss-pi-flarm-rx/ogn-config-web-alpium.py
+ExecStart=/usr/bin/python3 -I -u /home/hfss/hfss-pi-flarm-rx/ogn-station-agent.py
 Restart=always
 RestartSec=10
 # sudo for the helper needs privilege changes, so NoNewPrivileges stays off;
