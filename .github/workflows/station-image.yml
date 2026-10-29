@@ -39,4 +39,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: gh release upload "$TAG" dist/*.img.xz dist/image-info.json --clobber
+        run: gh release upload "$TAG" dist/*.img.xz dist/image-info.json --clobber --repo "${{ github.repository }}"
