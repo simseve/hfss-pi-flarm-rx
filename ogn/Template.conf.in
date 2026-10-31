@@ -3,7 +3,8 @@
 # station UI; a hand edit here is overwritten by the next save there.
 # Based on VirusPilot/ogn-pi34 223d78c (OGN 0.3.3). Differences from upstream:
 # HTTP status pages on 8080 (RF) and 8081 (decoder), because the station
-# agent owns 8082, and APRS.Call is always set.
+# agent owns 8082, APRS.Call is always set, and
+# APRS.Beacon.Comment names the station as Alpium's.
 
 RF:
 {
@@ -44,6 +45,10 @@ Position:
 APRS:
 {
   Call = "{call}";
+  Beacon:
+  {
+    Comment = "{comment}";   # shown by glidernet viewers beside the receiver name
+  };
 };
 
 HTTP:

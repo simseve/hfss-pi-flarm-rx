@@ -49,7 +49,7 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "3.3.5"
+AGENT_VERSION = "3.3.6"
 
 HOME = os.environ.get("ALPIUM_OGN_HOME", "/home/hfss")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -251,11 +251,18 @@ def validated_config(d):
     return cfg, None
 
 
+# The free text glidernet viewers print beside the receiver name (at most 63
+# characters). OGN has no owner field, so this is the only place a viewer
+# can read that the station belongs to Alpium's fleet.
+BEACON_COMMENT = "Alpium OGN receiver app.alpium.io"
+
+
 def write_config(cfg):
     with open(TEMPLATE_IN) as f:
         text = f.read()
     for key, value in cfg.items():
         text = text.replace("{" + key + "}", str(value))
+    text = text.replace("{comment}", BEACON_COMMENT)
     tmp = CONFIG_FILE + ".tmp"
     with open(tmp, "w") as f:
         f.write(text)
@@ -995,8 +1002,29 @@ class Server(ThreadingHTTPServer):
     request_queue_size = 16
 
 
+def ensure_beacon_comment():
+    """Re-render an enrolled station's config once when it predates the
+    beacon comment (or carries an older one), keeping every setting, so an
+    update reaches the stations already in the field without a save."""
+    if not load_credentials():
+        return
+    try:
+        with open(CONFIG_FILE) as f:
+            if f'Comment = "{BEACON_COMMENT}"' in f.read():
+                return
+    except OSError:
+        return
+    cfg, error = validated_config(read_config())
+    if error:
+        print("Beacon comment not added:", error, flush=True)
+        return
+    write_config(cfg)
+    print("Beacon comment added:", helper("restart-ogn").get("message"), flush=True)
+
+
 def main():
     load_history()
+    ensure_beacon_comment()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=led_loop, daemon=True).start()
     Server(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()

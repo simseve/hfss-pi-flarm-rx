@@ -165,6 +165,10 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   the serial; never `ALP`, which on glidernet is an Alpium pilot), and
   changed in *Manage*, *Identity*. Name a receiver after its site
   (http://wiki.glidernet.org/receiver-naming-convention).
+- **Who owns it** is said by the beacon comment, never the callsign: every
+  station sends `Alpium OGN receiver app.alpium.io` as `APRS.Beacon.Comment`
+  (OGN has no owner field; viewers such as nephos print the comment beside the
+  name). Agent 3.3.6 adds it to stations already in the field on its first start.
 - **Lost or stolen**: Alpium console, *Manage → Identity → Danger zone →
   Retire* (type the serial to confirm). Credentials revoked, tailnet
   node deleted, no more alerts.
@@ -174,7 +178,10 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
 - **Field Wi-Fi**: set once in Alpium (*Field Wi-Fi*, typically your phone
   hotspot; on an iPhone switch on *Maximize Compatibility*) and pushed to
   every station at the lowest priority. In the field, switch on the hotspot
-  and a station with no other network comes online through it.
+  and a station with no other network comes online through it. It is never
+  in the card image (the image is public on GitHub): a station receives it
+  when it is approved, so a NEW card still needs a network for its first
+  claim, the Wi-Fi you type in Raspberry Pi Imager or a cable or 4G.
 - **4G**: a 4G router next to the Pi needs nothing. A **HiLink / router-style
   dongle** (it shows up as a network card, e.g. Huawei E3372h-320 HiLink)
   works out of the box and is preferred over Wi-Fi, like a cable. A
