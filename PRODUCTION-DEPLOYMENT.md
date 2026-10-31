@@ -179,9 +179,43 @@ them), shreds the old `.env`, and keeps the receiver settings from the old
   hotspot; on an iPhone switch on *Maximize Compatibility*) and pushed to
   every station at the lowest priority. In the field, switch on the hotspot
   and a station with no other network comes online through it. It is never
-  in the card image (the image is public on GitHub): a station receives it
+  in the card image (the image is public on GitHub, so it holds no Wi-Fi
+  at all): a station receives it
   when it is approved, so a NEW card still needs a network for its first
   claim, the Wi-Fi you type in Raspberry Pi Imager or a cable or 4G.
+- **Site Wi-Fi by hand, over SSH** (when Alpium is not at hand). Reach the
+  Pi on the same network (e.g. your phone hotspot, the station's field Wi-Fi)
+  as the user you set in Raspberry Pi Imager, `ssh <user>@ogn-<serial>.local`
+  (`<serial>` is the 8 hex on the label), or from the tailnet
+  `ssh <user>@ogn-<serial>`. Then:
+
+  ```bash
+  read -rp "Wi-Fi name: " SSID; read -rsp "Password: " PSK; echo
+  sudo nmcli connection add type wifi ifname wlan0 con-name "$SSID" ssid "$SSID" \
+    wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PSK" connection.autoconnect-priority 1
+  unset PSK
+  nmcli -f NAME,AUTOCONNECT-PRIORITY connection show   # check it is saved
+  ```
+
+  `read -s` keeps the password out of the screen and the shell history.
+  Priority 1 puts it above the field Wi-Fi (-100); the Pi moves to it when it
+  is in range (switch the hotspot off, or `sudo nmcli connection up "$SSID"`,
+  which drops an SSH session made over the hotspot). The network then shows
+  in Alpium, *Manage, Network*, like one added there.
+
+  The field Wi-Fi itself (the emergency hotspot, `Simone15P` today) by hand,
+  when Alpium cannot reach the station: same command, its own name and the
+  LOWEST priority, so a site network always wins:
+
+  ```bash
+  read -rsp "Hotspot password: " PSK; echo
+  sudo nmcli connection add type wifi ifname wlan0 con-name alpium-field ssid Simone15P \
+    wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PSK" connection.autoconnect-priority -100
+  unset PSK
+  ```
+
+  On a new card the simplest emergency is to type the hotspot in Raspberry
+  Pi Imager's Wi-Fi step; at approval Alpium installs it as `alpium-field`.
 - **4G**: a 4G router next to the Pi needs nothing. A **HiLink / router-style
   dongle** (it shows up as a network card, e.g. Huawei E3372h-320 HiLink)
   works out of the box and is preferred over Wi-Fi, like a cable. A
